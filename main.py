@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import random
 import sys
 import time
 
@@ -81,7 +80,7 @@ def on_message(client, userdata, msg):
             logging.error(f"Failed to upload video {event_data['id']}.")
             # TODO: save this event in a separate table to retry later?
     else:
-        logging.error(f"No video clip available for this event {event_data['id']}.")
+        logging.debug(f"No video clip available for this event {event_data['id']} yet.")
 
 
 FIRST_RECONNECT_DELAY = 1
@@ -118,7 +117,6 @@ def main():
     logging.info("Initializing database...")
     database.init_db()
 
-    client_id = f'python-mqtt-{random.randint(0, 1000)}'
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.user_data_set(service)
     client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
