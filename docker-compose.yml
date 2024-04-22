@@ -1,0 +1,12 @@
+services:
+  frigate-gdrive-instant-uploader:
+    build: .
+    container_name: frigate-gdrive-instant-uploader
+    restart: unless-stopped
+    volumes:
+      - ./credentials:/app/credentials
+      - ./db:/app/db
+      - ./logs:/app/logs
+    environment:
+      - TZ=Europe/Istanbul
+    command: python main.py
