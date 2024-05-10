@@ -34,17 +34,15 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 log_file = 'logs/app.log'
+
 rotating_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=5)
 rotating_handler.setFormatter(log_formatter)
+
 logging.basicConfig(level=NUMERIC_LEVEL, format='%(asctime)s - %(levelname)s - %(message)s',
                     handlers=[
                         rotating_handler,
                         logging.StreamHandler()
                     ])
-
-# Example logging
-logger = logging.getLogger()
-logger.info('Log rotation setup complete.')
 
 
 def create_service():
