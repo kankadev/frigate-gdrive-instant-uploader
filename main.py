@@ -34,9 +34,6 @@ MATTERMOST_WEBHOOK_URL = os.getenv('MATTERMOST_WEBHOOK_URL')
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
-import logging
-from logging.handlers import RotatingFileHandler
-
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 log_file = 'logs/app.log'
 rotating_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=5)
