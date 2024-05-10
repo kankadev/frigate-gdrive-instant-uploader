@@ -88,7 +88,7 @@ def on_message(client, userdata, msg):
         logging.debug(f"Uploading video {event_data['id']} to Google Drive...")
         success = google_drive.upload_to_google_drive(userdata, event_data, FRIGATE_URL)
         if success:
-            logging.debug(f"Video {event_data['id']} successfully uploaded.")
+            logging.info(f"Video {event_data['id']} successfully uploaded.")
         else:
             logging.error(f"Failed to upload video {event_data['id']}.")
             # TODO: save this event in a separate table to retry later?
