@@ -50,10 +50,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
                         logging.StreamHandler()
                     ])
 
-logger = logging.getLogger()
-logger.info('Log rotation and Mattermost integration setup complete.')
-logger.error('Just started... Just testing the Mattermost integration.')
-
 
 def create_service():
     """Create and return a Google Drive service client."""
