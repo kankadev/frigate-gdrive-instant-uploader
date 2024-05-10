@@ -13,6 +13,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from src import database, google_drive
+from src.mattermost_handler import MattermostHandler
 
 load_dotenv()
 
@@ -29,20 +30,32 @@ MQTT_PORT = int(os.getenv('MQTT_PORT'))
 MQTT_TOPIC = os.getenv('MQTT_TOPIC')
 MQTT_USER = os.getenv('MQTT_USER')
 MQTT_PASSWORD = os.getenv('MQTT_PASSWORD')
+MATTERMOST_WEBHOOK_URL = os.getenv('MATTERMOST_WEBHOOK_URL')
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
+import logging
+from logging.handlers import RotatingFileHandler
+
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 log_file = 'logs/app.log'
-
 rotating_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=5)
 rotating_handler.setFormatter(log_formatter)
 
-logging.basicConfig(level=NUMERIC_LEVEL, format='%(asctime)s - %(levelname)s - %(message)s',
+mattermost_handler = MattermostHandler(MATTERMOST_WEBHOOK_URL)
+mattermost_handler.setFormatter(log_formatter)
+mattermost_handler.setLevel(logging.ERROR)  # Ensure the level is set to ERROR
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
                     handlers=[
                         rotating_handler,
+                        mattermost_handler,
                         logging.StreamHandler()
                     ])
+
+logger = logging.getLogger()
+logger.info('Log rotation and Mattermost integration setup complete.')
+logger.error('Just started... Just testing the Mattermost integration.')
 
 
 def create_service():
