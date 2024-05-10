@@ -26,6 +26,8 @@ UPLOAD_DIR=frigate
 # Frigate URL with protocol and port
 FRIGATE_URL=http://192.168.0.100:5000
 
+# Mattermost
+MATTERMOST_WEBHOOK_URL=
 
 # TODO
 # Upload clips of the last x days
