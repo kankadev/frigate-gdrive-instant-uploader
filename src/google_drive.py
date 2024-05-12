@@ -1,10 +1,10 @@
 import logging
 import os
+import ssl
 import tempfile
-from datetime import datetime
-
 import requests
 from dotenv import load_dotenv
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 from datetime import datetime
 import pytz
@@ -22,21 +22,26 @@ def generate_filename(camera_name, start_time, event_id):
 
 
 def find_or_create_folder(service, name, parent_id=None):
-    query = f"name='{name}' and mimeType='application/vnd.google-apps.folder'"
-    if parent_id:
-        query += f" and parents in '{parent_id}'"
-    results = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
-    folder = results.get('files', [])
-    if not folder:
-        folder_metadata = {
-            'name': name,
-            'mimeType': 'application/vnd.google-apps.folder',
-            'parents': [parent_id] if parent_id else []
-        }
-        folder = service.files().create(body=folder_metadata, fields='id').execute()
-        return folder.get('id')
-    else:
-        return folder[0]['id']
+    try:
+        query = f"name='{name}' and mimeType='application/vnd.google-apps.folder'"
+        if parent_id:
+            query += f" and parents in '{parent_id}'"
+        results = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
+        folder = results.get('files', [])
+        if not folder:
+            folder_metadata = {
+                'name': name,
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [parent_id] if parent_id else []
+            }
+            folder = service.files().create(body=folder_metadata, fields='id').execute()
+            return folder.get('id')
+        else:
+            return folder[0]['id']
+
+    except HttpError as error:
+        logging.error(f"An error occurred: {error}")
+        return None
 
 
 def upload_to_google_drive(service, event, frigate_url):
@@ -53,16 +58,34 @@ def upload_to_google_drive(service, event, frigate_url):
 
     video_url = f"{frigate_url}/api/events/{event_id}/clip.mp4"
 
-    with tempfile.TemporaryFile() as fh:
-        response = requests.get(video_url, stream=True)
-        if response.status_code == 200:
-            for chunk in response.iter_content(chunk_size=8192):
-                fh.write(chunk)
-            fh.seek(0)
-            media = MediaIoBaseUpload(fh, mimetype='video/mp4', resumable=True)
-            file_metadata = {'name': filename, 'parents': [day_folder_id]}
-            file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-            return True
-        else:
-            logging.error(f"Could not download video from {video_url}. Status code: {response.status_code}")
-            return False
+    try:
+        with tempfile.TemporaryFile() as fh:
+            response = requests.get(video_url, stream=True, timeout=300)
+            if response.status_code == 200:
+                for chunk in response.iter_content(chunk_size=8192):
+                    fh.write(chunk)
+                fh.seek(0)
+                media = MediaIoBaseUpload(fh, mimetype='video/mp4', resumable=True)
+                file_metadata = {'name': filename, 'parents': [day_folder_id]}
+                try:
+                    file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+                    if 'id' in file:
+                        logging.info(f"Video {filename} successfully uploaded to Google Drive with ID: {file['id']}.")
+                        return True
+                    else:
+                        logging.error(f"Failed to upload video {filename} to Google Drive. No file ID returned.")
+                        return False
+                except HttpError as error:
+                    logging.error(f"Error uploading to Google Drive: {error}")
+                    return False
+            else:
+                logging.error(f"Could not download video from {video_url}. Status code: {response.status_code}")
+                return False
+
+    except (requests.RequestException, ssl.SSLError) as e:
+        logging.error(f"Error downloading video from {video_url}: {e}")
+        return False
+    except Exception as e:
+        logging.error(f"Unexpected error: {e}", exc_info=True)
+        return False
+
