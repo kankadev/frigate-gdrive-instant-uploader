@@ -89,3 +89,4 @@ def upload_to_google_drive(service, event, frigate_url):
         logging.error(f"Unexpected error: {e}", exc_info=True)
         return False
 
+
