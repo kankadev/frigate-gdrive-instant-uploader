@@ -50,15 +50,29 @@ def upload_to_google_drive(service, event, frigate_url):
     event_id = event['id']
     filename = generate_filename(camera_name, start_time, event_id)
     year, month, day = filename.split("__")[0].split("-")[:3]
-
-    frigate_folder_id = find_or_create_folder(service, UPLOAD_DIR)
-    year_folder_id = find_or_create_folder(service, year, frigate_folder_id)
-    month_folder_id = find_or_create_folder(service, month, year_folder_id)
-    day_folder_id = find_or_create_folder(service, day, month_folder_id)
-
     video_url = f"{frigate_url}/api/events/{event_id}/clip.mp4"
 
     try:
+        frigate_folder_id = find_or_create_folder(service, UPLOAD_DIR)
+        if not frigate_folder_id:
+            logging.error(f"Failed to find or create folder: {UPLOAD_DIR}")
+            return False
+
+        year_folder_id = find_or_create_folder(service, year, frigate_folder_id)
+        if not year_folder_id:
+            logging.error(f"Failed to find or create folder: {year}")
+            return False
+
+        month_folder_id = find_or_create_folder(service, month, year_folder_id)
+        if not month_folder_id:
+            logging.error(f"Failed to find or create folder: {month}")
+            return False
+
+        day_folder_id = find_or_create_folder(service, day, month_folder_id)
+        if not day_folder_id:
+            logging.error(f"Failed to find or create folder: {day}")
+            return False
+
         with tempfile.TemporaryFile() as fh:
             response = requests.get(video_url, stream=True, timeout=300)
             if response.status_code == 200:
