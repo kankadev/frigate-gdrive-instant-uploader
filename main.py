@@ -103,7 +103,6 @@ def handle_single_event(event_data, userdata):
         logging.debug(f"Uploading video {event_data['id']} to Google Drive...")
         success = google_drive.upload_to_google_drive(userdata, event_data, FRIGATE_URL)
         if success:
-            logging.info(f"Video {event_data['id']} successfully uploaded.")
             database.update_event(event_data['id'], 1)
         else:
             logging.error(f"Failed to upload video {event_data['id']}.")
