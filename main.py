@@ -178,7 +178,9 @@ def schedule_event_handling(service, interval=300):
         logging.debug("Handling failed events...")
         failed_events = database.select_not_uploaded_yet_hard()
         if failed_events:
-            logging.error(f"Failed events: {failed_events}")
+            logging.error(f"Failed events: {failed_events}... Please check the logs for more information.")
+        else:
+            logging.debug("No failed events found.")
 
         threading.Timer(21600, handle_failed_events).start()
 
