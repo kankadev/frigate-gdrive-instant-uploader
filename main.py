@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from logging.handlers import RotatingFileHandler
 
@@ -12,12 +13,13 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from src import database, google_drive
+from src import database, google_drive, frigate_api
+from src.frigate_api import fetch_all_events
 from src.mattermost_handler import MattermostHandler
 
 load_dotenv()
 
-LOGGING_LEVEL = os.getenv('LOGGING_LEVEL', 'INFO').upper()
+LOGGING_LEVEL = os.getenv('LOGGING_LEVEL', 'DEBUG').upper()
 NUMERIC_LEVEL = getattr(logging, LOGGING_LEVEL, None)
 if not isinstance(NUMERIC_LEVEL, int):
     raise ValueError(f'invalid logging level: {LOGGING_LEVEL}')
@@ -41,9 +43,9 @@ rotating_handler.setFormatter(log_formatter)
 
 mattermost_handler = MattermostHandler(MATTERMOST_WEBHOOK_URL)
 mattermost_handler.setFormatter(log_formatter)
-mattermost_handler.setLevel(logging.ERROR)  # Ensure the level is set to ERROR
+mattermost_handler.setLevel(logging.ERROR)
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
+logging.basicConfig(level=NUMERIC_LEVEL, format='%(asctime)s - %(levelname)s - %(message)s',
                     handlers=[
                         rotating_handler,
                         mattermost_handler,
@@ -84,16 +86,31 @@ def on_message(client, userdata, msg):
     event_data = json.loads(msg.payload)['after']
     logging.debug(f"Event data: {event_data}")
 
+    handle_single_event(event_data, userdata)
+
+
+def handle_single_event(event_data, userdata):
+    """
+    Handles a single event. Uploads the video to Google Drive if available and updates the database.
+    :param event_data:
+    :param userdata:
+    :return:
+    """
+    if not database.is_event_exists(event_data['id']):
+        database.insert_event(event_data['id'])
+
     if event_data['has_clip'] and event_data['end_time']:
         logging.debug(f"Uploading video {event_data['id']} to Google Drive...")
         success = google_drive.upload_to_google_drive(userdata, event_data, FRIGATE_URL)
         if success:
             logging.info(f"Video {event_data['id']} successfully uploaded.")
+            database.update_event(event_data['id'], 1)
         else:
             logging.error(f"Failed to upload video {event_data['id']}.")
-            # TODO: save this event in a separate table to retry later?
+            database.update_event(event_data['id'], 0)
     else:
         logging.debug(f"No video clip available for this event {event_data['id']} yet.")
+        database.update_event(event_data['id'], 0)
 
 
 FIRST_RECONNECT_DELAY = 1
@@ -123,11 +140,13 @@ def on_disconnect(client, userdata, rc):
 
 
 def main():
-    """Main function to initialize services and process events."""
-    logging.info("Initializing Google Drive Service...")
+    """
+    Main function to initialize services and process events.
+    """
+    logging.debug("Initializing Google Drive Service...")
     service = create_service()
 
-    logging.info("Initializing database...")
+    logging.debug("Initializing database...")
     database.init_db()
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -138,7 +157,53 @@ def main():
     client.on_disconnect = on_disconnect
     client.connect(MQTT_BROKER_ADDRESS, MQTT_PORT, 180)
 
-    client.loop_forever()
+    client.loop_start()
+
+    schedule_event_handling(service)
+
+
+def schedule_event_handling(service, interval=300):
+    """
+    Schedule event handling in intervals.
+    :param service: The Google Drive service object.
+    :param interval: Interval in seconds to run handle_all_events.
+    """
+
+    def handle_all_events_and_cleanup():
+        logging.debug("Handling all events and cleaning up old events...")
+        handle_all_events(service)
+        database.cleanup_old_events()
+        threading.Timer(interval, handle_all_events_and_cleanup).start()
+
+    def handle_failed_events():
+        logging.debug("Handling failed events...")
+        failed_events = database.select_not_uploaded_yet_hard()
+        if failed_events:
+            logging.error(f"Failed events: {failed_events}")
+
+        threading.Timer(21600, handle_failed_events).start()
+
+    handle_all_events_and_cleanup()
+    handle_failed_events()
+
+
+def handle_all_events(service):
+    logging.debug("Fetching all events from Frigate...")
+    all_events = fetch_all_events(FRIGATE_URL, batch_size=100)
+    if all_events:
+        logging.debug(f"Received {len(all_events)} events")
+        for event in all_events:
+            logging.debug(f"Handling event: {event['id']} in handle_all_events")
+            uploaded_status = database.select_event_uploaded(event['id'])
+            if uploaded_status == 0 or uploaded_status is None:
+                logging.debug(f"Event {event['id']} not uploaded yet. Handling...")
+                handle_single_event(event, service)
+            elif uploaded_status == 1:
+                logging.debug(f"Event {event['id']} already uploaded. Skipping...")
+            else:
+                logging.warning(f"Event {event['id']} has an unexpected uploaded status: {uploaded_status}")
+    else:
+        logging.error("Failed to fetch events from Frigate.")
 
 
 if __name__ == "__main__":
