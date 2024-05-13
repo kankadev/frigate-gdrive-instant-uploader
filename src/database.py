@@ -2,7 +2,7 @@ import os
 import sqlite3
 import logging
 
-DB_PATH = 'db/events.db'
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'db/events.db')
 
 
 def init_db(db_path=DB_PATH):
