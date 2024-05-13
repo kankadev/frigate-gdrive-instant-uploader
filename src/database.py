@@ -42,9 +42,11 @@ def init_db(db_path=DB_PATH):
                 WHERE event_id = OLD.event_id;
             END;
         ''')
+
         conn.commit()
     except Exception as e:
         logging.error(f"Error initializing database: {e}")
+        conn.rollback()
     finally:
         conn.close()
 
