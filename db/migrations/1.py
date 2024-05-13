@@ -13,16 +13,10 @@ def apply_migration():
         result = cursor.fetchone()
 
         if result:
-            print("Migration 1.py already applied.")
+            logging.debug("Migration 1.py already applied.")
             return
 
-
-        cursor.execute('''
-            ALTER TABLE events ADD COLUMN retry BOOLEAN DEFAULT 1
-        ''')
-        # Record this migration as applied
-        cursor.execute('INSERT INTO migrations (name) VALUES (?)', ('1.py',))
-
+        cursor.execute('ALTER TABLE events ADD COLUMN retry BOOLEAN DEFAULT 1')
         conn.commit()
 
     except Exception as e:
