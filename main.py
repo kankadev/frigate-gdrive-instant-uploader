@@ -144,29 +144,6 @@ def on_disconnect(client, userdata, rc):
     logging.info("Reconnect failed after %s attempts. Exiting...", reconnect_count)
 
 
-def main():
-    """
-    Main function to initialize services and process events.
-    """
-    logging.debug("Initializing Google Drive Service...")
-    service = create_service()
-
-    logging.debug("Initializing database...")
-    init_db_and_run_migrations()
-
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.user_data_set(service)
-    client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
-    client.on_connect = on_connect
-    client.on_message = on_message
-    client.on_disconnect = on_disconnect
-    client.connect(MQTT_BROKER_ADDRESS, MQTT_PORT, 180)
-
-    client.loop_start()
-
-    schedule_event_handling(service)
-
-
 def schedule_event_handling(service, interval=300):
     """
     Schedule event handling in intervals.
@@ -242,6 +219,29 @@ def run_migrations(migrations_folder='db/migrations'):
 def init_db_and_run_migrations():
     database.init_db()
     run_migrations()
+
+
+def main():
+    """
+    Main function to initialize services and process events.
+    """
+    logging.debug("Initializing Google Drive Service...")
+    service = create_service()
+
+    logging.debug("Initializing database...")
+    init_db_and_run_migrations()
+
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.user_data_set(service)
+    client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.on_disconnect = on_disconnect
+    client.connect(MQTT_BROKER_ADDRESS, MQTT_PORT, 180)
+
+    client.loop_start()
+
+    schedule_event_handling(service)
 
 
 if __name__ == "__main__":
