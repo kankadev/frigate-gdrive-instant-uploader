@@ -66,6 +66,7 @@ def run_migrations(migrations_folder='db/migrations'):
                 logging.info(f"Running migration: {migration_path}")
                 try:
                     with open(migration_path) as file:
+                        logging.debug(f"Executing migration {filename}")
                         exec(file.read(), globals())
                     cursor.execute('INSERT INTO migrations (name) VALUES (?)', (filename,))
                     conn.commit()
