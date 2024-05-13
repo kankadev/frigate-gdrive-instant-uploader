@@ -18,6 +18,7 @@ def apply_migration():
 
         cursor.execute('ALTER TABLE events ADD COLUMN retry BOOLEAN DEFAULT 1')
         conn.commit()
+        logging.debug("Migration 1.py applied successfully.")
 
     except Exception as e:
         logging.error(f"Unexpected error: {e}", exc_info=True)
