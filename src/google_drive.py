@@ -10,6 +10,7 @@ from datetime import datetime
 import pytz
 
 from src import database
+from src.frigate_api import generate_video_url
 
 load_dotenv()
 
@@ -52,7 +53,7 @@ def upload_to_google_drive(service, event, frigate_url):
     event_id = event['id']
     filename = generate_filename(camera_name, start_time, event_id)
     year, month, day = filename.split("__")[0].split("-")[:3]
-    video_url = f"{frigate_url}/api/events/{event_id}/clip.mp4"
+    video_url = generate_video_url(frigate_url, event_id)
 
     try:
         frigate_folder_id = find_or_create_folder(service, UPLOAD_DIR)
