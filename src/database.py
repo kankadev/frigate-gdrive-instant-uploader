@@ -14,7 +14,7 @@ def init_db(db_path=DB_PATH):
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS events (
                 event_id TEXT PRIMARY KEY, 
-                uploaded BOOLEAN NOT NULL CHECK (uploaded IN (0, 1)),
+                uploaded BOOLEAN DEFAULT 0,
                 created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 tries INTEGER DEFAULT 0,
