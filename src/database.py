@@ -9,10 +9,11 @@ def init_db(db_path=DB_PATH):
     conn = sqlite3.connect(db_path)
     try:
         cursor = conn.cursor()
+        # Create the events table if it does not exist
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS events (
                 event_id TEXT PRIMARY KEY, 
-                uploaded BOOLEAN NOT NULL CHECK (uploaded IN (0, 1)) DEFAULT 0,
+                uploaded BOOLEAN NOT NULL CHECK (uploaded IN (0, 1)),
                 created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 tries INTEGER DEFAULT 0,
@@ -112,6 +113,25 @@ def select_retry(event_id, db_path=DB_PATH):
     result = cursor.fetchone()
     conn.close()
     return result[0] if result else None
+
+
+def update_event_retry(event_id, retry, db_path=DB_PATH):
+    """
+    Updates the retry status of an event in the database.
+    :param event_id:
+    :param retry:
+    :param db_path:
+    :return:
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute('UPDATE events SET retry = ? WHERE event_id = ?', (retry, event_id))
+        conn.commit()
+    except Exception as e:
+        logging.error(f"Error updating event retry status: {e}")
+    finally:
+        conn.close()
 
 
 def select_tries(event_id, db_path=DB_PATH):

@@ -10,18 +10,19 @@ def apply_migration():
     try:
         cursor = conn.cursor()
 
-        # Add the retry column if it doesn't exist
-        cursor.execute('''
-               ALTER TABLE events
-               ADD COLUMN IF NOT EXISTS retry BOOLEAN DEFAULT 1
-           ''')
+        # Check if the 'retry' column already exists
+        cursor.execute("PRAGMA table_info(events)")
+        columns = [column[1] for column in cursor.fetchall()]
 
-        # Record this migration as applied
-        cursor.execute('INSERT INTO migrations (name) VALUES (?)', ('1.py',))
+        if 'retry' not in columns:
+            cursor.execute('''
+                ALTER TABLE events ADD COLUMN retry BOOLEAN DEFAULT 1
+            ''')
+            # Record this migration as applied
+            cursor.execute('INSERT INTO migrations (name) VALUES (?)', ('1.py',))
 
         conn.commit()
-        conn.close()
-        logging.info("Migration applied successfully.")
+
     except Exception as e:
         logging.error(f"Unexpected error: {e}", exc_info=True)
     finally:
