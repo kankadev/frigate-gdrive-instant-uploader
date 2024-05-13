@@ -5,17 +5,27 @@ DB_PATH = 'db/events.db'
 
 
 def init_db(db_path=DB_PATH):
+    logging.info(f"Initializing database at {db_path}")
     conn = sqlite3.connect(db_path)
     try:
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS events (
                 event_id TEXT PRIMARY KEY, 
-                uploaded BOOLEAN DEFAULT 0,
+                uploaded BOOLEAN NOT NULL CHECK (uploaded IN (0, 1)) DEFAULT 0,
                 created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 tries INTEGER DEFAULT 0,
                 retry BOOLEAN DEFAULT 1
+            )
+        ''')
+
+        # Create the migrations table if it does not exist
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS migrations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
