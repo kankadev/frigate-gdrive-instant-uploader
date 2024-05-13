@@ -55,11 +55,9 @@ def run_migrations(migrations_folder='db/migrations'):
     try:
         cursor = conn.cursor()
 
-        # Hole bereits angewendete Migrationen
         cursor.execute('SELECT name FROM migrations')
         applied_migrations = set(row[0] for row in cursor.fetchall())
 
-        # Durchlaufe und führe neue Migrationen aus
         for filename in sorted(os.listdir(migrations_folder)):
             if filename.endswith('.py') and filename not in applied_migrations:
                 migration_path = os.path.join(migrations_folder, filename)
