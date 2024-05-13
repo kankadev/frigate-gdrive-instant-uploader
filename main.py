@@ -1,7 +1,7 @@
-import glob
 import json
 import logging
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -14,7 +14,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from src import database, google_drive, frigate_api
+from src import database, google_drive
+from src.database import DB_PATH
 from src.frigate_api import fetch_all_events
 from src.mattermost_handler import MattermostHandler
 
@@ -151,7 +152,7 @@ def main():
     service = create_service()
 
     logging.debug("Initializing database...")
-    database.init_db()
+    init_db_and_run_migrations()
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.user_data_set(service)
@@ -212,13 +213,32 @@ def handle_all_events(service):
         logging.error("Failed to fetch events from Frigate.")
 
 
-def run_migrations():
-    migration_files = sorted(glob.glob('db/migrations/*.py'))
-    for migration in migration_files:
-        logging.info(f"Running migration: {migration}")
-        exec(open(migration).read())
+def run_migrations(migrations_folder='db/migrations'):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute('SELECT name FROM migrations')
+    applied_migrations = set(row[0] for row in cursor.fetchall())
+
+    for filename in sorted(os.listdir(migrations_folder)):
+        if filename.endswith('.py') and filename not in applied_migrations:
+            migration_path = os.path.join(migrations_folder, filename)
+            logging.info(f"Running migration: {migration_path}")
+            try:
+                exec(open(migration_path).read(), globals())
+                cursor.execute('INSERT INTO migrations (name) VALUES (?)', (filename,))
+                conn.commit()
+            except Exception as e:
+                logging.error(f"Error applying migration {filename}: {e}")
+                conn.rollback()
+
+    conn.close()
+
+
+def init_db_and_run_migrations():
+    database.init_db()
+    run_migrations()
 
 
 if __name__ == "__main__":
-    run_migrations()
     main()
