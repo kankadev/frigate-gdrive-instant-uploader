@@ -9,17 +9,19 @@ def apply_migration():
     conn = sqlite3.connect(DB_PATH)
     try:
         cursor = conn.cursor()
+        cursor.execute("SELECT name FROM migrations WHERE name='1.py'")
+        result = cursor.fetchone()
 
-        # Check if the 'retry' column already exists
-        cursor.execute("PRAGMA table_info(events)")
-        columns = [column[1] for column in cursor.fetchall()]
+        if result:
+            print("Migration 1.py already applied.")
+            return
 
-        if 'retry' not in columns:
-            cursor.execute('''
-                ALTER TABLE events ADD COLUMN retry BOOLEAN DEFAULT 1
-            ''')
-            # Record this migration as applied
-            cursor.execute('INSERT INTO migrations (name) VALUES (?)', ('1.py',))
+
+        cursor.execute('''
+            ALTER TABLE events ADD COLUMN retry BOOLEAN DEFAULT 1
+        ''')
+        # Record this migration as applied
+        cursor.execute('INSERT INTO migrations (name) VALUES (?)', ('1.py',))
 
         conn.commit()
 
