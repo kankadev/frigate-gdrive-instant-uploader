@@ -28,5 +28,5 @@ FRIGATE_URL=http://192.168.0.100:5000
 
 
 # Mattermost
-MATTERMOST_WEBHOOK_URL=https://mattermost.example.org/hooks/ojewbngpiwuebgiouenbrgi
+MATTERMOST_WEBHOOK_URL=
 MATTERMOST_PREFIX="[my message prefix]"
