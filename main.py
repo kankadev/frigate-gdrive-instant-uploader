@@ -190,35 +190,9 @@ def handle_all_events(service):
         logging.error("Failed to fetch events from Frigate.")
 
 
-def run_migrations(migrations_folder='db/migrations'):
-    conn = sqlite3.connect(DB_PATH)
-
-    try:
-        cursor = conn.cursor()
-
-        cursor.execute('SELECT name FROM migrations')
-        applied_migrations = set(row[0] for row in cursor.fetchall())
-
-        for filename in sorted(os.listdir(migrations_folder)):
-            if filename.endswith('.py') and filename not in applied_migrations:
-                migration_path = os.path.join(migrations_folder, filename)
-                logging.info(f"Running migration: {migration_path}")
-                try:
-                    exec(open(migration_path).read(), globals())
-                    cursor.execute('INSERT INTO migrations (name) VALUES (?)', (filename,))
-                    conn.commit()
-                except Exception as e:
-                    logging.error(f"Error applying migration {filename}: {e}")
-                    conn.rollback()
-    except Exception as e:
-        logging.error(f"Error running migrations: {e}")
-    finally:
-        conn.close()
-
-
 def init_db_and_run_migrations():
     database.init_db()
-    run_migrations()
+    database.run_migrations()
 
 
 def main():

@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import logging
 
@@ -44,6 +45,36 @@ def init_db(db_path=DB_PATH):
         conn.commit()
     except Exception as e:
         logging.error(f"Error initializing database: {e}")
+    finally:
+        conn.close()
+
+
+def run_migrations(migrations_folder='db/migrations'):
+    conn = sqlite3.connect(DB_PATH)
+
+    try:
+        cursor = conn.cursor()
+
+        # Hole bereits angewendete Migrationen
+        cursor.execute('SELECT name FROM migrations')
+        applied_migrations = set(row[0] for row in cursor.fetchall())
+
+        # Durchlaufe und führe neue Migrationen aus
+        for filename in sorted(os.listdir(migrations_folder)):
+            if filename.endswith('.py') and filename not in applied_migrations:
+                migration_path = os.path.join(migrations_folder, filename)
+                logging.info(f"Running migration: {migration_path}")
+                try:
+                    with open(migration_path) as file:
+                        exec(file.read(), globals())
+                    cursor.execute('INSERT INTO migrations (name) VALUES (?)', (filename,))
+                    conn.commit()
+                    logging.info(f"Migration {filename} applied successfully.")
+                except Exception as e:
+                    logging.error(f"Error applying migration {filename}: {e}")
+                    conn.rollback()
+    except Exception as e:
+        logging.error(f"Error running migrations: {e}")
     finally:
         conn.close()
 
