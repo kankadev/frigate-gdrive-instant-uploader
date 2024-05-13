@@ -11,10 +11,11 @@ def init_db(db_path=DB_PATH):
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS events (
                 event_id TEXT PRIMARY KEY, 
-                uploaded BOOLEAN NOT NULL CHECK (uploaded IN (0, 1)) DEFAULT 0,
+                uploaded BOOLEAN DEFAULT 0,
                 created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                tries INTEGER DEFAULT 0
+                tries INTEGER DEFAULT 0,
+                retry BOOLEAN DEFAULT 1
             )
         ''')
 
@@ -68,23 +69,39 @@ def insert_event(event_id, db_path=DB_PATH):
         conn.close()
 
 
-def update_event(event_id, uploaded, db_path=DB_PATH):
+def update_event(event_id, uploaded, retry=None, db_path=DB_PATH):
     """
     Updates an event in the database.
     :param event_id:
     :param uploaded:
+    :param retry:
     :param db_path:
     :return:
     """
     conn = sqlite3.connect(db_path)
-    try:
-        cursor = conn.cursor()
+    cursor = conn.cursor()
+    if retry is not None:
+        cursor.execute('UPDATE events SET uploaded = ?, retry = ?, tries = tries + 1 WHERE event_id = ?',
+                       (uploaded, retry, event_id))
+    else:
         cursor.execute('UPDATE events SET uploaded = ?, tries = tries + 1 WHERE event_id = ?', (uploaded, event_id))
-        conn.commit()
-    except Exception as e:
-        logging.error(f"Error updating event: {e}")
-    finally:
-        conn.close()
+    conn.commit()
+    conn.close()
+
+
+def select_retry(event_id, db_path=DB_PATH):
+    """
+    Selects the retry status of an event.
+    :param event_id:
+    :param db_path:
+    :return:
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('SELECT retry FROM events WHERE event_id = ?', (event_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
 
 
 def select_tries(event_id, db_path=DB_PATH):

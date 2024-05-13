@@ -9,6 +9,8 @@ from googleapiclient.http import MediaIoBaseUpload
 from datetime import datetime
 import pytz
 
+from src import database
+
 load_dotenv()
 
 UPLOAD_DIR = os.getenv('UPLOAD_DIR')
@@ -92,9 +94,14 @@ def upload_to_google_drive(service, event, frigate_url):
                 except HttpError as error:
                     logging.error(f"Error uploading to Google Drive: {error}")
                     return False
-            else:
-                logging.error(f"Could not download video from {video_url}. Status code: {response.status_code}")
+            elif response.status_code == 500 and response.json().get('message') == "Could not create clip from recordings":
+                logging.error(f"Clip not found for event {event_id}.")
+                if database.select_tries(event_id) >= 10:
+                    database.update_event(event_id, 0, retry=0)
+                    logging.error(f"Clip creation failed for {event_id}. Marking as non-retriable.")
                 return False
+            logging.error(f"Could not download video from {video_url}. Status code: {response.status_code}")
+            return False
 
     except (requests.RequestException, ssl.SSLError) as e:
         logging.error(f"Error downloading video from {video_url}: {e}")

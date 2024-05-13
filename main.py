@@ -1,3 +1,4 @@
+import glob
 import json
 import logging
 import os
@@ -100,13 +101,17 @@ def handle_single_event(event_data, userdata):
         database.insert_event(event_data['id'])
 
     if event_data['has_clip'] and event_data['end_time']:
-        logging.debug(f"Uploading video {event_data['id']} to Google Drive...")
-        success = google_drive.upload_to_google_drive(userdata, event_data, FRIGATE_URL)
-        if success:
-            database.update_event(event_data['id'], 1)
+        if database.select_retry(event_data['id']):
+            logging.debug(f"Uploading video {event_data['id']} to Google Drive...")
+            success = google_drive.upload_to_google_drive(userdata, event_data, FRIGATE_URL)
+            if success:
+                logging.info(f"Video {event_data['id']} successfully uploaded.")
+                database.update_event(event_data['id'], 1)
+            else:
+                logging.error(f"Failed to upload video {event_data['id']}.")
+                database.update_event(event_data['id'], 0)
         else:
-            logging.error(f"Failed to upload video {event_data['id']}.")
-            database.update_event(event_data['id'], 0)
+            logging.debug(f"Event {event_data['id']} marked as non-retriable. Skipping upload.")
     else:
         logging.debug(f"No video clip available for this event {event_data['id']} yet.")
         database.update_event(event_data['id'], 0)
@@ -205,6 +210,13 @@ def handle_all_events(service):
                 logging.warning(f"Event {event['id']} has an unexpected uploaded status: {uploaded_status}")
     else:
         logging.error("Failed to fetch events from Frigate.")
+
+
+def run_migrations():
+    migration_files = sorted(glob.glob('db/migrations/*.py'))
+    for migration in migration_files:
+        logging.info(f"Running migration: {migration}")
+        exec(open(migration).read())
 
 
 if __name__ == "__main__":

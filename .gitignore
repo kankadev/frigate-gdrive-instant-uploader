@@ -162,7 +162,8 @@ cython_debug/
 
 /credentials/*
 !/credentials/.gitkeep
-/db/*
+/db/events.db
 !/db/.gitkeep
+!/db/migrations/*
 /logs/*
 !/logs/.gitkeep
