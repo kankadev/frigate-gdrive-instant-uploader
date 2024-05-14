@@ -94,12 +94,15 @@ def on_message(client, userdata, msg):
     logging.debug(f"Message received `{msg.payload.decode()}` from topic `{msg.topic}`")
     event = json.loads(msg.payload)
     event_type = event.get('type', None)
+    end_time = event.get('end_time', None)
+    has_clip = event.get('has_clip', False)
 
-    if event_type == 'end':
+    if event_type == 'end' and end_time is not None and has_clip is True:
         event_data = event['after']
         handle_single_event(event_data, userdata)
     else:
-        logging.debug(f"Ignoring event type: {event_type}")
+        logging.debug(f"Received a MQTT message but event type, end_time or has_clip doesn't interest us. Wait for "
+                      f"the full message. Skipping...")
 
 
 def handle_single_event(event_data, userdata):
@@ -109,11 +112,16 @@ def handle_single_event(event_data, userdata):
     :param userdata:
     :return:
     """
+
     event_id = event_data['id']
+    event_type = event_data['type']
+    end_time = event_data['end_time']
+    has_clip = event_data['has_clip']
+
     if not database.is_event_exists(event_id):
         database.insert_event(event_id)
 
-    if event_data['has_clip'] and event_data['end_time']:
+    if event_type == 'end' and end_time is not None and has_clip is True:
         if database.select_retry(event_id) == 0:
             logging.debug(f"Event {event_id} is marked as non-retriable. Skipping upload.")
         else:
@@ -125,13 +133,26 @@ def handle_single_event(event_data, userdata):
                     logging.info(f"Video {event_id} successfully uploaded.")
                     database.update_event(event_id, 1)
                 else:
-                    logging.error(f"Failed to upload video {event_id}.")
                     database.update_event(event_id, 0)
+                    # to prevent annoying logs / notifications... Notify only after 3 tries
+                    if database.select_tries(event_id) >= 3:
+                        logging.error(f"Failed to upload video {event_id}.")
             else:
                 logging.debug(f"Event {event_id} already uploaded. Skipping...")
+
+
+def handle_all_events(service):
+    logging.debug("Fetching all events from Frigate...")
+    all_events = fetch_all_events(FRIGATE_URL, batch_size=100)
+    if all_events:
+        logging.debug(f"Received {len(all_events)} events")
+        i = 1
+        for event in all_events:
+            logging.debug(f"Handling event #{i}: {event['id']} in handle_all_events")
+            handle_single_event(event, service)
+            i = i + 1
     else:
-        logging.debug(f"No video clip available for this event {event_id} yet. Try again later...")
-        database.update_event(event_id, 0)
+        logging.error("Failed to fetch events from Frigate.")
 
 
 # MQTT Reconnect settings
@@ -161,20 +182,6 @@ def on_disconnect(client, userdata, rc):
     logging.info("Reconnect failed after %s attempts. Exiting...", reconnect_count)
 
 
-def handle_all_events(service):
-    logging.debug("Fetching all events from Frigate...")
-    all_events = fetch_all_events(FRIGATE_URL, batch_size=100)
-    if all_events:
-        logging.debug(f"Received {len(all_events)} events")
-        i = 1
-        for event in all_events:
-            logging.debug(f"Handling event #{i}: {event['id']} in handle_all_events")
-            handle_single_event(event, service)
-            i = i + 1
-    else:
-        logging.error("Failed to fetch events from Frigate.")
-
-
 def init_db_and_run_migrations():
     database.init_db()
     database.run_migrations()
@@ -201,7 +208,7 @@ def run_every_6_hours():
     logging.debug("Handling failed events...")
     failed_events = database.select_not_uploaded_yet_hard()
     if failed_events:
-        logging.error(f"Failed events: {failed_events}... Please check the logs for more information.")
+        logging.error(f"{len(failed_events)} failed events: {failed_events} ... Please check the logs for more information.")
     else:
         logging.debug("No failed events found.")
 

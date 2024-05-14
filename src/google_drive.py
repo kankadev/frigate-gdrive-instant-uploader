@@ -99,7 +99,9 @@ def upload_to_google_drive(service, event, frigate_url):
                 logging.error(f"Clip not found for event {event_id}.")
                 if database.select_tries(event_id) >= 10:
                     database.update_event(event_id, 0, retry=0)
-                    logging.error(f"Clip creation failed for {event_id}. Marking as non-retriable.")
+                    logging.error(f"Clip creation failed for {event_id}. "
+                                  f"Couldn't download its clip from {generate_video_url(frigate_url, event_id)}. "
+                                  f"Marking as non-retriable.")
                 return False
             logging.error(f"Could not download video from {video_url}. Status code: {response.status_code}")
             return False
