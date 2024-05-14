@@ -86,12 +86,12 @@ def create_service():
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
-    logging.info(f"Connected with result code {reason_code}")
+    logging.info(f"MQTT connected with result code {reason_code}")
     client.subscribe(MQTT_TOPIC)
 
 
 def on_message(client, userdata, msg):
-    logging.debug(f"Message received `{msg.payload.decode()}` from topic `{msg.topic}`")
+    logging.debug(f"MQTT message received `{msg.payload.decode()}` from topic `{msg.topic}`")
     event = json.loads(msg.payload)
     event_type = event.get('type', None)
     end_time = event.get('end_time', None)
@@ -162,7 +162,7 @@ MAX_RECONNECT_DELAY = 60
 
 
 def on_disconnect(client, userdata, rc):
-    logging.info("Disconnected with result code: %s", rc)
+    logging.info("MQTT disconnected with result code: %s", rc)
     reconnect_count, reconnect_delay = 0, FIRST_RECONNECT_DELAY
     while reconnect_count < MAX_RECONNECT_COUNT:
         logging.info("Reconnecting in %d seconds...", reconnect_delay)
