@@ -12,7 +12,7 @@ def fetch_all_events(frigate_url, batch_size=100):
     before = None
 
     while True:
-        params = {'limit': batch_size}
+        params = {'limit': batch_size, 'has_clip': 1}
         if before:
             params['before'] = before
 

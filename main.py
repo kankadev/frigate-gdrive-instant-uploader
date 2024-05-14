@@ -114,14 +114,13 @@ def handle_single_event(event_data, userdata):
     """
 
     event_id = event_data['id']
-    event_type = event_data['type']
     end_time = event_data['end_time']
     has_clip = event_data['has_clip']
 
     if not database.is_event_exists(event_id):
         database.insert_event(event_id)
 
-    if event_type == 'end' and end_time is not None and has_clip is True:
+    if end_time is not None and has_clip is True:
         if database.select_retry(event_id) == 0:
             logging.debug(f"Event {event_id} is marked as non-retriable. Skipping upload.")
         else:
