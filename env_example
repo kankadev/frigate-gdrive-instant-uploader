@@ -13,10 +13,7 @@ MQTT_PASSWORD=secret
 
 
 # Google Drive
-GOOGLE_CREDENTIALS_JSON_FILE=credentials/google_drive_credentials.json
-
-# the token will be created automatically after first run and will saved here as defined
-GOOGLE_TOKEN_FILE=credentials/token.json
+SERVICE_ACCOUNT_FILE=credentials/service_account.json
 
 # Upload directory in Google Drive, will be created automatically in Google Drive. It will be created under the root directory.
 # Directory structure in Google Drive will be: /<UPLOAD_DIR>/<YEAR>/<MONTH>/<DAY>/
