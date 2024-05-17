@@ -8,6 +8,8 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 from datetime import datetime
 import pytz
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 from src import database
 from src.frigate_api import generate_video_url
@@ -16,6 +18,13 @@ load_dotenv()
 
 UPLOAD_DIR = os.getenv('UPLOAD_DIR')
 TIMEZONE = os.getenv('TIMEZONE', 'Europe/Istanbul')
+SERVICE_ACCOUNT_FILE = os.getenv('SERVICE_ACCOUNT_FILE')
+
+SCOPES = ['https://www.googleapis.com/auth/drive']
+
+credentials = service_account.Credentials.from_service_account_file(
+    SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+service = build('drive', 'v3', credentials=credentials)
 
 
 def generate_filename(camera_name, start_time, event_id):
@@ -24,7 +33,7 @@ def generate_filename(camera_name, start_time, event_id):
     return f"{local_time.strftime('%Y-%m-%d-%H-%M-%S')}__{camera_name}__{event_id}.mp4"
 
 
-def find_or_create_folder(service, name, parent_id=None):
+def find_or_create_folder(name, parent_id=None):
     try:
         query = f"name='{name}' and mimeType='application/vnd.google-apps.folder'"
         if parent_id:
@@ -47,7 +56,7 @@ def find_or_create_folder(service, name, parent_id=None):
         return None
 
 
-def upload_to_google_drive(service, event, frigate_url):
+def upload_to_google_drive(event, frigate_url):
     camera_name = event['camera']
     start_time = event['start_time']
     event_id = event['id']
@@ -56,22 +65,22 @@ def upload_to_google_drive(service, event, frigate_url):
     video_url = generate_video_url(frigate_url, event_id)
 
     try:
-        frigate_folder_id = find_or_create_folder(service, UPLOAD_DIR)
+        frigate_folder_id = find_or_create_folder(UPLOAD_DIR)
         if not frigate_folder_id:
             logging.error(f"Failed to find or create folder: {UPLOAD_DIR}")
             return False
 
-        year_folder_id = find_or_create_folder(service, year, frigate_folder_id)
+        year_folder_id = find_or_create_folder(year, frigate_folder_id)
         if not year_folder_id:
             logging.error(f"Failed to find or create folder: {year}")
             return False
 
-        month_folder_id = find_or_create_folder(service, month, year_folder_id)
+        month_folder_id = find_or_create_folder(month, year_folder_id)
         if not month_folder_id:
             logging.error(f"Failed to find or create folder: {month}")
             return False
 
-        day_folder_id = find_or_create_folder(service, day, month_folder_id)
+        day_folder_id = find_or_create_folder(day, month_folder_id)
         if not day_folder_id:
             logging.error(f"Failed to find or create folder: {day}")
             return False
