@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import sys
 import threading
 import time
 from logging.handlers import RotatingFileHandler
@@ -9,10 +8,6 @@ from logging.handlers import RotatingFileHandler
 import paho.mqtt.client as mqtt
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
 
 from src import database, google_drive
 from src.frigate_api import fetch_all_events
@@ -34,8 +29,6 @@ MQTT_TOPIC = os.getenv('MQTT_TOPIC')
 MQTT_USER = os.getenv('MQTT_USER')
 MQTT_PASSWORD = os.getenv('MQTT_PASSWORD')
 MATTERMOST_WEBHOOK_URL = os.getenv('MATTERMOST_WEBHOOK_URL', None)
-
-SCOPES = ['https://www.googleapis.com/auth/drive']
 
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 log_file = 'logs/app.log'
@@ -61,30 +54,6 @@ else:
                         ])
 
 
-def create_service():
-    """Create and return a Google Drive service client."""
-    logging.debug("Initializing Google Drive Service...")
-    creds = None
-    try:
-        if os.path.exists(GOOGLE_TOKEN_FILE):
-            creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                if not os.path.exists(GOOGLE_CREDENTIALS_JSON_FILE):
-                    logging.error(f"Google credentials file not found: {GOOGLE_CREDENTIALS_JSON_FILE}")
-                    raise FileNotFoundError(f"Google credentials file not found: {GOOGLE_CREDENTIALS_JSON_FILE}")
-                flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_CREDENTIALS_JSON_FILE, SCOPES)
-                creds = flow.run_local_server(port=0)
-            with open(GOOGLE_TOKEN_FILE, 'w') as token:
-                token.write(creds.to_json())
-        return build('drive', 'v3', credentials=creds)
-    except Exception as e:
-        logging.error(f"Failed to create Google Drive service: {e}", exc_info=True)
-        sys.exit(1)
-
-
 def on_connect(client, userdata, flags, reason_code, properties):
     logging.info(f"MQTT connected with result code {reason_code}")
     client.subscribe(MQTT_TOPIC)
@@ -99,20 +68,18 @@ def on_message(client, userdata, msg):
 
     if event_type == 'end' and end_time is not None and has_clip is True:
         event_data = event['after']
-        handle_single_event(event_data, userdata)
+        handle_single_event(event_data)
     else:
         logging.debug(f"Received a MQTT message but event type, end_time or has_clip doesn't interest us. Wait for "
                       f"the full message. Skipping...")
 
 
-def handle_single_event(event_data, userdata):
+def handle_single_event(event_data):
     """
     Handles a single event. Uploads the video to Google Drive if available and updates the database.
     :param event_data:
-    :param userdata:
     :return:
     """
-
     event_id = event_data['id']
     end_time = event_data['end_time']
     has_clip = event_data['has_clip']
@@ -127,7 +94,7 @@ def handle_single_event(event_data, userdata):
             uploaded_status = database.select_event_uploaded(event_id)
             if uploaded_status == 0 or uploaded_status is None:
                 logging.debug(f"Uploading video {event_id} to Google Drive...")
-                success = google_drive.upload_to_google_drive(userdata, event_data, FRIGATE_URL)
+                success = google_drive.upload_to_google_drive(event_data, FRIGATE_URL)
                 if success:
                     logging.info(f"Video {event_id} successfully uploaded.")
                     database.update_event(event_id, 1)
@@ -140,7 +107,7 @@ def handle_single_event(event_data, userdata):
                 logging.debug(f"Event {event_id} already uploaded. Skipping...")
 
 
-def handle_all_events(service):
+def handle_all_events():
     logging.debug("Fetching all events from Frigate...")
     all_events = fetch_all_events(FRIGATE_URL, batch_size=100)
     if all_events:
@@ -148,7 +115,7 @@ def handle_all_events(service):
         i = 1
         for event in all_events:
             logging.debug(f"Handling event #{i}: {event['id']} in handle_all_events")
-            handle_single_event(event, service)
+            handle_single_event(event)
             i = i + 1
     else:
         logging.error("Failed to fetch events from Frigate.")
@@ -188,7 +155,6 @@ def init_db_and_run_migrations():
 
 def mqtt_handler():
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.user_data_set(create_service())
     client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
     client.on_connect = on_connect
     client.on_message = on_message
@@ -199,7 +165,7 @@ def mqtt_handler():
 
 def run_every_3_minutes():
     logging.debug("Handling all events and cleaning up old events...")
-    handle_all_events(create_service())
+    handle_all_events()
     database.cleanup_old_events()
 
 
