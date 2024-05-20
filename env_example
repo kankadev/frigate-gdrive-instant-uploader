@@ -14,6 +14,7 @@ MQTT_PASSWORD=secret
 
 # Google Drive
 SERVICE_ACCOUNT_FILE=credentials/service_account.json
+GOOGLE_ACCOUNT_TO_IMPERSONATE=myexamplemail@gmail.com
 
 # Upload directory in Google Drive, will be created automatically in Google Drive. It will be created under the root directory.
 # Directory structure in Google Drive will be: /<UPLOAD_DIR>/<YEAR>/<MONTH>/<DAY>/
