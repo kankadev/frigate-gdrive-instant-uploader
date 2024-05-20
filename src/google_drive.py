@@ -19,11 +19,12 @@ load_dotenv()
 UPLOAD_DIR = os.getenv('UPLOAD_DIR')
 TIMEZONE = os.getenv('TIMEZONE', 'Europe/Istanbul')
 SERVICE_ACCOUNT_FILE = os.getenv('SERVICE_ACCOUNT_FILE')
+GOOGLE_ACCOUNT_TO_IMPERSONATE = os.getenv('GOOGLE_ACCOUNT_TO_IMPERSONATE')
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
 credentials = service_account.Credentials.from_service_account_file(
-    SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    SERVICE_ACCOUNT_FILE, scopes=SCOPES, subject=GOOGLE_ACCOUNT_TO_IMPERSONATE)
 service = build('drive', 'v3', credentials=credentials)
 
 
