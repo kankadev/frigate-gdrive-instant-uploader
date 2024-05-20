@@ -16,6 +16,7 @@ and this script are running on the same Proxmox server in LXC containers.
 - python 3.8
 - MQTT broker
 - Frigate with configured MQTT
+- Google Service Account with access to Google Drive
 
 # Example Frigate configuration
 ```yaml
@@ -39,15 +40,17 @@ or mosquitto_sub. If so, you should see events from Frigate and can use this scr
 2. rename `env_example` to `.env` and change values to your needs
 3. run `python setup.py` in project root directory to install all required packages
 4. create a project in google cloud console and enable drive api
-5. create a service account and give it access to your google drive
-6. download the service account json file from Google and copy its content to `credentials/service_account.json`
-7. run `python main.py` in project root directory
+5. create a service account and give it access to your Google Drive
+6. activate domain-wide-delegation for the service account and add the necessary scope "https://www.googleapis.com/auth/drive" to prevent "Quota Exceeded" errors if you upload more than 15 GB per day.
+7. download the service account json file from Google and copy its content to `credentials/service_account.json`
+8. run `python main.py` in project root directory
 
 # Usage with Docker
 1. clone this repository
 2. rename `env_example` to `.env` and change values to your needs
 3. create a project in google cloud console and enable drive api
-4. create a service account and give it access to your google drive
+4. create a service account and give it access to your Google Drive
 5. download the service account json file from Google and copy its content to `credentials/service_account.json`
-6. run `docker compose up -d` in project root directory
-7. check logs with `docker logs frigate-gdrive-instant-uploader` or see `/logs/app.log`
+6. activate domain-wide-delegation for the service account and add the necessary scope "https://www.googleapis.com/auth/drive" to prevent "Quota Exceeded" errors if you upload more than 15 GB per day.
+7. run `docker compose up -d` in project root directory
+8. check logs with `docker logs frigate-gdrive-instant-uploader` or see `/logs/app.log`
