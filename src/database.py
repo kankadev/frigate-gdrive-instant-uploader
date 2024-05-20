@@ -200,7 +200,6 @@ def select_event_uploaded(event_id, db_path=DB_PATH):
         result = cursor.fetchone()
         if result:
             uploaded_status = result[0]
-            logging.debug(f"Event ID {event_id}: Uploaded status is {uploaded_status}")
             return uploaded_status
         else:
             logging.debug(f"Event ID {event_id} not found in database.")

@@ -21,8 +21,6 @@ if not isinstance(NUMERIC_LEVEL, int):
     raise ValueError(f'invalid logging level: {LOGGING_LEVEL}')
 
 FRIGATE_URL = os.getenv('FRIGATE_URL')
-GOOGLE_CREDENTIALS_JSON_FILE = os.getenv('GOOGLE_CREDENTIALS_JSON_FILE', 'credentials/google_drive_credentials.json')
-GOOGLE_TOKEN_FILE = os.getenv('GOOGLE_TOKEN_FILE', 'credentials/token.json')
 MQTT_BROKER_ADDRESS = os.getenv('MQTT_BROKER_ADDRESS')
 MQTT_PORT = int(os.getenv('MQTT_PORT'))
 MQTT_TOPIC = os.getenv('MQTT_TOPIC')
