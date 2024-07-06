@@ -4,6 +4,7 @@ import os
 import threading
 import time
 from logging.handlers import RotatingFileHandler
+import socket
 
 import paho.mqtt.client as mqtt
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -85,7 +86,7 @@ def handle_single_event(event_data):
     if not database.is_event_exists(event_id):
         database.insert_event(event_id)
 
-    if end_time is not None and has_clip is True:
+    if end_time is not None and has_clip is True and internet() is True:
         if database.select_retry(event_id) == 0:
             logging.debug(f"Event {event_id} is marked as non-retriable. Skipping upload.")
         else:
@@ -171,9 +172,25 @@ def run_every_6_hours():
     logging.debug("Handling failed events...")
     failed_events = database.select_not_uploaded_yet_hard()
     if failed_events:
-        logging.error(f"{len(failed_events)} failed events: {failed_events} ... Please check the logs for more information.")
+        logging.error(
+            f"{len(failed_events)} failed events: {failed_events} ... Please check the logs for more information.")
     else:
         logging.debug("No failed events found.")
+
+
+def internet(host="8.8.8.8", port=53, timeout=3):
+    """
+    Host: 8.8.8.8 (google-public-dns-a.google.com)
+    OpenPort: 53/tcp
+    Service: domain (DNS/TCP)
+    """
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        return True
+    except socket.error as ex:
+        print(ex)
+        return False
 
 
 def main():
