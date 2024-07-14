@@ -111,7 +111,7 @@ def upload_to_google_drive(event, frigate_url):
                     logging.error(f"Error uploading to Google Drive: {error}")
                     return False
             elif response.status_code == 500 and response.json().get('message') == "Could not create clip from recordings":
-                logging.error(f"Clip not found for event {event_id}.")
+                logging.warning(f"Clip not found for event {event_id}.")
                 if database.select_tries(event_id) >= 10:
                     database.update_event(event_id, 0, retry=0)
                     logging.error(f"Clip creation failed for {event_id}. "
