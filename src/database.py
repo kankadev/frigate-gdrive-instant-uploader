@@ -1,8 +1,11 @@
 import os
 import sqlite3
 import logging
+from dotenv import load_dotenv
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'db/events.db')
+load_dotenv()
+EVENT_RETENTION_DAYS = int(os.getenv('EVENT_RETENTION_DAYS', 40))
 
 
 def init_db(db_path=DB_PATH):
@@ -253,14 +256,17 @@ def select_not_uploaded_yet_hard(db_path=DB_PATH):
 
 def cleanup_old_events(db_path=DB_PATH):
     """
-    Deletes uploaded events that are older than 40 days.
+    Deletes uploaded events that are older than the configured retention period.
     :param db_path:
     :return:
     """
     conn = sqlite3.connect(db_path)
     try:
         cursor = conn.cursor()
-        cursor.execute('DELETE FROM events WHERE created <= datetime("now", "-40 days") and uploaded = 1')
+        cursor.execute(
+            'DELETE FROM events WHERE created <= datetime("now", ? || " days") and uploaded = 1',
+            (f"-{EVENT_RETENTION_DAYS}",)
+        )
         conn.commit()
     except Exception as e:
         logging.error(f"Error cleaning up old events: {e}")
