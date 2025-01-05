@@ -62,8 +62,8 @@ def on_message(client, userdata, msg):
     logging.debug(f"MQTT message received `{msg.payload.decode()}` from topic `{msg.topic}`")
     event = json.loads(msg.payload)
     event_type = event.get('type', None)
-    end_time = event.get('end_time', None)
-    has_clip = event.get('has_clip', False)
+    end_time = event.get('after', {}).get('end_time', None)
+    has_clip = event.get('after', {}).get('has_clip', False)
 
     if event_type == 'end' and end_time is not None and has_clip is True:
         event_data = event['after']
