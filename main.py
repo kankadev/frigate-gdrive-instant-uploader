@@ -35,12 +35,12 @@ rotating_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backu
 rotating_handler.setFormatter(log_formatter)
 
 if MATTERMOST_WEBHOOK_URL is None:
-    logging.warning("MATTERMOST_WEBHOOK_URL is not set. Mattermost notifications will not be sent.")
     logging.basicConfig(level=NUMERIC_LEVEL, format='%(asctime)s - %(levelname)s - %(message)s',
                         handlers=[
                             rotating_handler,
                             logging.StreamHandler()
                         ])
+    logging.warning("MATTERMOST_WEBHOOK_URL is not set. Mattermost notifications will not be sent.")
 else:
     mattermost_handler = MattermostHandler(MATTERMOST_WEBHOOK_URL)
     mattermost_handler.setFormatter(log_formatter)
