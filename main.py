@@ -162,7 +162,7 @@ def mqtt_handler():
     client.loop_forever()
 
 
-def run_every_3_minutes():
+def run_every_x_minutes():
     logging.debug("Handling all events and cleaning up old events...")
     handle_all_events()
     database.cleanup_old_events()
@@ -205,7 +205,7 @@ def main():
     mqtt_thread.start()
 
     scheduler = BackgroundScheduler()
-    scheduler.add_job(run_every_3_minutes, 'interval', minutes=3)
+    scheduler.add_job(run_every_x_minutes, 'interval', minutes=10)
     scheduler.add_job(run_every_6_hours, 'interval', hours=6)
     scheduler.start()
 
