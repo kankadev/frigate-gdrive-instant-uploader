@@ -39,8 +39,16 @@ DOWNLOAD_TIMEOUT = 300  # 5 minutes for video download
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
 def get_google_service():
-    """Initialize and return a Google Drive service with retry support."""
+    """Initialize and return a Google Drive service."""
     try:
+        # Check if service account file exists
+        if not os.path.isfile(SERVICE_ACCOUNT_FILE):
+            logging.error(f"Service account file not found at: {SERVICE_ACCOUNT_FILE}")
+            logging.error(f"Current working directory: {os.getcwd()}")
+            if os.path.exists(os.path.dirname(SERVICE_ACCOUNT_FILE)):
+                logging.error(f"Directory contents: {os.listdir(os.path.dirname(SERVICE_ACCOUNT_FILE))}")
+            raise FileNotFoundError(f"Service account file not found at: {SERVICE_ACCOUNT_FILE}")
+            
         # Initialize credentials
         if GOOGLE_ACCOUNT_TO_IMPERSONATE:
             credentials = service_account.Credentials.from_service_account_file(
@@ -51,29 +59,8 @@ def get_google_service():
                 SERVICE_ACCOUNT_FILE, scopes=SCOPES)
             logging.info("Using service account without impersonation")
         
-        # Create an authorized session
-        from google.auth.transport.requests import AuthorizedSession
-        
-        # Configure retry strategy
-        retry_strategy = Retry(
-            total=MAX_RETRIES,
-            backoff_factor=1,
-            status_forcelist=[500, 502, 503, 504, 429],
-            allowed_methods=["GET", "POST", "PUT", "DELETE"]
-        )
-        
-        # Create an HTTP adapter with retry strategy
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        
-        # Create an authorized session with the credentials
-        session = AuthorizedSession(credentials)
-        
-        # Mount the adapter to the session
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
-        
-        # Build the service with the authorized session
-        return build('drive', 'v3', cache_discovery=False, requestBuilder=lambda *args, **kwargs: session)
+        # Build and return the service
+        return build('drive', 'v3', credentials=credentials, cache_discovery=False)
         
     except Exception as e:
         logging.error(f"Error initializing Google Drive service: {str(e)}")
