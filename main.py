@@ -1,57 +1,93 @@
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from logging.handlers import RotatingFileHandler
 import socket
 
+# Erstelle das Log-Verzeichnis, falls es nicht existiert
+os.makedirs('logs', exist_ok=True)
+
+# Konfiguriere das Logging zuerst
+LOGGING_LEVEL = os.getenv('LOGGING_LEVEL', 'DEBUG').upper()
+NUMERIC_LEVEL = getattr(logging, LOGGING_LEVEL, logging.DEBUG)
+if not isinstance(NUMERIC_LEVEL, int):
+    print(f"Ungültiges Log-Level: {LOGGING_LEVEL}, verwende DEBUG")
+    NUMERIC_LEVEL = logging.DEBUG
+
+# Root-Logger konfigurieren
+root_logger = logging.getLogger()
+root_logger.setLevel(NUMERIC_LEVEL)
+
+# Bestehende Handler entfernen
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+
+# Konsole-Handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(NUMERIC_LEVEL)
+console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(console_formatter)
+root_logger.addHandler(console_handler)
+
+# Datei-Handler
+log_file = 'logs/app.log'
+file_handler = RotatingFileHandler(
+    log_file, 
+    maxBytes=5 * 1024 * 1024,  # 5 MB
+    backupCount=5,
+    encoding='utf-8'
+)
+file_handler.setLevel(NUMERIC_LEVEL)
+file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(file_formatter)
+root_logger.addHandler(file_handler)
+
+# Logger für dieses Modul
+logger = logging.getLogger(__name__)
+logger.info(f"Logging initialisiert mit Level {LOGGING_LEVEL}")
+
+# Jetzt die restlichen Imports durchführen, nachdem das Logging eingerichtet ist
+from dotenv import load_dotenv
 import paho.mqtt.client as mqtt
 from apscheduler.schedulers.background import BackgroundScheduler
-from dotenv import load_dotenv
 
 from src import database, google_drive
 from src.frigate_api import fetch_all_events
 from src.google_drive import cleanup_old_files_on_drive, service
 from src.mattermost_handler import MattermostHandler
 
-load_dotenv()
+# Lade Umgebungsvariablen
+try:
+    load_dotenv()
+    logger.info("Umgebungsvariablen geladen")
+except Exception as e:
+    logger.error(f"Fehler beim Laden der .env Datei: {e}")
 
-LOGGING_LEVEL = os.getenv('LOGGING_LEVEL', 'DEBUG').upper()
-NUMERIC_LEVEL = getattr(logging, LOGGING_LEVEL, None)
-if not isinstance(NUMERIC_LEVEL, int):
-    raise ValueError(f'invalid logging level: {LOGGING_LEVEL}')
-
+# Konfiguration aus Umgebungsvariablen laden
 FRIGATE_URL = os.getenv('FRIGATE_URL')
 MQTT_BROKER_ADDRESS = os.getenv('MQTT_BROKER_ADDRESS')
-MQTT_PORT = int(os.getenv('MQTT_PORT'))
+MQTT_PORT = int(os.getenv('MQTT_PORT', '1883'))
 MQTT_TOPIC = os.getenv('MQTT_TOPIC')
 MQTT_USER = os.getenv('MQTT_USER')
 MQTT_PASSWORD = os.getenv('MQTT_PASSWORD')
-MATTERMOST_WEBHOOK_URL = os.getenv('MATTERMOST_WEBHOOK_URL', None)
+MATTERMOST_WEBHOOK_URL = os.getenv('MATTERMOST_WEBHOOK_URL')
 
-log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-log_file = 'logs/app.log'
-rotating_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=5)
-rotating_handler.setFormatter(log_formatter)
-
-if MATTERMOST_WEBHOOK_URL is None:
-    logging.basicConfig(level=NUMERIC_LEVEL, format='%(asctime)s - %(levelname)s - %(message)s',
-                        handlers=[
-                            rotating_handler,
-                            logging.StreamHandler()
-                        ])
-    logging.warning("MATTERMOST_WEBHOOK_URL is not set. Mattermost notifications will not be sent.")
+# Mattermost-Handler hinzufügen, falls konfiguriert
+if MATTERMOST_WEBHOOK_URL:
+    try:
+        mattermost_handler = MattermostHandler(MATTERMOST_WEBHOOK_URL)
+        mattermost_handler.setLevel(logging.ERROR)
+        mattermost_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        mattermost_handler.setFormatter(mattermost_formatter)
+        root_logger.addHandler(mattermost_handler)
+        logger.info("Mattermost-Benachrichtigungen aktiviert")
+    except Exception as e:
+        logger.error(f"Fehler beim Initialisieren des Mattermost-Handlers: {e}")
 else:
-    mattermost_handler = MattermostHandler(MATTERMOST_WEBHOOK_URL)
-    mattermost_handler.setFormatter(log_formatter)
-    mattermost_handler.setLevel(logging.ERROR)
-    logging.basicConfig(level=NUMERIC_LEVEL, format='%(asctime)s - %(levelname)s - %(message)s',
-                        handlers=[
-                            rotating_handler,
-                            mattermost_handler,
-                            logging.StreamHandler()
-                        ])
+    logger.warning("MATTERMOST_WEBHOOK_URL nicht gesetzt. Mattermost-Benachrichtigungen sind deaktiviert.")
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
