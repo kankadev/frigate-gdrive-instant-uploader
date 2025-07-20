@@ -1,5 +1,6 @@
-# Set the timezone of the system to avoid problems with the date and time in filenames
-TIMEZONE=Europe/Istanbul
+# Set the timezone for the application. This should match the TZ variable in docker-compose.yml.
+# For a list of valid timezones: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+TZ=Europe/Istanbul
 
 # DEBUG, INFO, WARNING, ERROR or CRITICAL
 LOGGING_LEVEL=DEBUG
