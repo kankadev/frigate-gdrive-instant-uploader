@@ -1,4 +1,3 @@
-import io
 import logging
 import os
 import ssl
@@ -280,6 +279,8 @@ def download_video_with_retry(video_url, max_retries=3):
 
 def upload_to_google_drive(event, frigate_url):
     """Upload a video to Google Drive with retry logic and proper error handling."""
+    import io  # Moved here to prevent early initialization issues
+    
     camera_name = event['camera']
     start_time = event['start_time']
     event_id = event['id']
