@@ -2,6 +2,7 @@ import logging
 import os
 import ssl
 import tempfile
+import threading
 import requests
 from dotenv import load_dotenv
 from googleapiclient.errors import HttpError
@@ -32,6 +33,9 @@ else:
 
 service = build('drive', 'v3', credentials=credentials)
 
+# Lock to prevent race conditions when creating folders
+folder_creation_lock = threading.Lock()
+
 
 def generate_filename(camera_name, start_time, event_id):
     utc_time = datetime.fromtimestamp(start_time, pytz.utc)
@@ -40,26 +44,35 @@ def generate_filename(camera_name, start_time, event_id):
 
 
 def find_or_create_folder(name, parent_id=None):
-    try:
-        query = f"name='{name}' and mimeType='application/vnd.google-apps.folder'"
-        if parent_id:
-            query += f" and parents in '{parent_id}'"
-        results = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
-        folder = results.get('files', [])
-        if not folder:
-            folder_metadata = {
-                'name': name,
-                'mimeType': 'application/vnd.google-apps.folder',
-                'parents': [parent_id] if parent_id else []
-            }
-            folder = service.files().create(body=folder_metadata, fields='id').execute()
-            return folder.get('id')
-        else:
-            return folder[0]['id']
+    # Use a lock to prevent race conditions where multiple threads try to create the same folder.
+    with folder_creation_lock:
+        try:
+            # More specific query to avoid finding similarly named folders or folders in trash.
+            query = f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+            if parent_id:
+                query += f" and '{parent_id}' in parents"
 
-    except HttpError as error:
-        logging.error(f"An error occurred: {error}")
-        return None
+            results = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+            folders = results.get('files', [])
+
+            if not folders:
+                # Folder does not exist, create it.
+                folder_metadata = {
+                    'name': name,
+                    'mimeType': 'application/vnd.google-apps.folder',
+                    'parents': [parent_id] if parent_id else []
+                }
+                folder = service.files().create(body=folder_metadata, fields='id').execute()
+                logging.debug(f"Created folder '{name}' with id {folder.get('id')}")
+                return folder.get('id')
+            else:
+                # Folder already exists, return its ID.
+                logging.debug(f"Found existing folder '{name}' with id {folders[0]['id']}")
+                return folders[0]['id']
+
+        except HttpError as error:
+            logging.error(f"An error occurred while finding or creating folder '{name}': {error}")
+            return None
 
 
 def upload_to_google_drive(event, frigate_url):

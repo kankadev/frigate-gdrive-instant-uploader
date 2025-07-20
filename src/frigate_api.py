@@ -8,7 +8,7 @@ def generate_video_url(frigate_url, event_id):
     return f"{frigate_url}/api/events/{event_id}/clip.mp4"
 
 
-def fetch_all_events(frigate_url, batch_size=50, retries=2, timeout=30):
+def fetch_all_events(frigate_url, batch_size=100, retries=2, timeout=30):
     all_events = []
     before = None
 
