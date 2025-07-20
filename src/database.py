@@ -17,6 +17,7 @@ def init_db(db_path=DB_PATH):
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS events (
                 event_id TEXT PRIMARY KEY, 
+                start_time REAL,
                 uploaded BOOLEAN DEFAULT 0,
                 created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -97,7 +98,7 @@ def is_event_exists(event_id, db_path=DB_PATH):
         conn.close()
 
 
-def insert_event(event_id, db_path=DB_PATH):
+def insert_event(event_id, start_time, db_path=DB_PATH):
     """
     Inserts an event into the database.
     :param event_id:
@@ -107,7 +108,7 @@ def insert_event(event_id, db_path=DB_PATH):
     conn = sqlite3.connect(db_path)
     try:
         cursor = conn.cursor()
-        cursor.execute('INSERT INTO events (event_id) VALUES (?)', (event_id,))
+        cursor.execute('INSERT INTO events (event_id, start_time) VALUES (?, ?)', (event_id, start_time))
         conn.commit()
     except Exception as e:
         logging.error(f"Error inserting event: {e}")
@@ -250,6 +251,23 @@ def select_not_uploaded_yet_hard(db_path=DB_PATH):
     except Exception as e:
         logging.error(f"Error selecting not uploaded yet hard events: {e}")
         return []
+    finally:
+        conn.close()
+
+
+def get_latest_event_start_time(db_path=DB_PATH):
+    """
+    Retrieves the start_time of the most recent event from the database.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute('SELECT MAX(start_time) FROM events')
+        result = cursor.fetchone()
+        return result[0] if result and result[0] is not None else 0
+    except Exception as e:
+        logging.error(f"Error getting latest event start time: {e}")
+        return 0
     finally:
         conn.close()
 

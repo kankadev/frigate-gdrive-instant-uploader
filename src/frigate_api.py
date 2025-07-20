@@ -8,7 +8,7 @@ def generate_video_url(frigate_url, event_id):
     return f"{frigate_url}/api/events/{event_id}/clip.mp4"
 
 
-def fetch_all_events(frigate_url, batch_size=100, retries=2, timeout=30):
+def fetch_all_events(frigate_url, after=None, batch_size=100, retries=2, timeout=30):
     all_events = []
     before = None
 
@@ -16,6 +16,8 @@ def fetch_all_events(frigate_url, batch_size=100, retries=2, timeout=30):
         params = {'limit': batch_size, 'has_clip': 1}
         if before:
             params['before'] = before
+        elif after:
+            params['after'] = after
 
         for attempt in range(retries):
             try:
@@ -36,6 +38,7 @@ def fetch_all_events(frigate_url, batch_size=100, retries=2, timeout=30):
                 break  # No more events to fetch
             all_events.extend(events)
             before = events[-1]['start_time']
+            after = None  # Clear after the first successful fetch
             logging.debug(f"Fetched {len(events)} events, next 'before' set to {before}")
         else:
             logging.error(f"Failed to fetch events: {response.status_code} {response.text}")

@@ -83,8 +83,10 @@ def handle_single_event(event_data):
     end_time = event_data['end_time']
     has_clip = event_data['has_clip']
 
+    start_time = event_data['start_time']
+
     if not database.is_event_exists(event_id):
-        database.insert_event(event_id)
+        database.insert_event(event_id, start_time)
 
     if end_time is not None and has_clip is True and internet() is True:
         if database.select_retry(event_id) == 0:
@@ -107,8 +109,9 @@ def handle_single_event(event_data):
 
 
 def handle_all_events():
-    logging.debug("Fetching all events from Frigate...")
-    all_events = fetch_all_events(FRIGATE_URL, batch_size=100)
+    latest_start_time = database.get_latest_event_start_time()
+    logging.debug(f"Fetching all events from Frigate since {latest_start_time}...")
+    all_events = fetch_all_events(FRIGATE_URL, after=latest_start_time, batch_size=100)
     if all_events:
         logging.debug(f"Received {len(all_events)} events")
         i = 1
