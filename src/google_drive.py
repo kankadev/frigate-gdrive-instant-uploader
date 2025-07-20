@@ -64,8 +64,9 @@ def get_google_service():
         return build('drive', 'v3', credentials=credentials, cache_discovery=False)
         
     except Exception as e:
-        logging.error(f"Error initializing Google Drive service: {str(e)}")
-        raise
+        error_msg = f"Error initializing Google Drive service: {str(e)}"
+        logging.error(error_msg)
+        raise RuntimeError(error_msg) from e
 
 # Initialize the service
 service = get_google_service()
