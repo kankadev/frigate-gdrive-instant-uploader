@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from src import database, google_drive
 from src.frigate_api import fetch_all_events
+from src.google_drive import cleanup_old_files_on_drive, service
 from src.mattermost_handler import MattermostHandler
 
 load_dotenv()
@@ -210,6 +211,7 @@ def main():
     scheduler = BackgroundScheduler()
     scheduler.add_job(run_every_x_minutes, 'interval', minutes=10)
     scheduler.add_job(run_every_6_hours, 'interval', hours=6)
+    scheduler.add_job(lambda: cleanup_old_files_on_drive(service), 'interval', days=1)
     scheduler.start()
 
     try:

@@ -7,7 +7,7 @@ import requests
 from dotenv import load_dotenv
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -16,6 +16,7 @@ from src import database
 from src.frigate_api import generate_video_url
 
 load_dotenv()
+GDRIVE_RETENTION_DAYS = int(os.getenv('GDRIVE_RETENTION_DAYS', 0))
 
 UPLOAD_DIR = os.getenv('UPLOAD_DIR')
 # Prioritize standard 'TZ' env var, but fall back to 'TIMEZONE' for backward compatibility.
@@ -74,6 +75,106 @@ def find_or_create_folder(name, parent_id=None):
         except HttpError as error:
             logging.error(f"An error occurred while finding or creating folder '{name}': {error}")
             return None
+
+
+def get_folder_id(drive_service, folder_name, parent_id):
+    try:
+        query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        if parent_id:
+            query += f" and '{parent_id}' in parents"
+
+        results = drive_service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+        folders = results.get('files', [])
+
+        if not folders:
+            return None
+        else:
+            return folders[0]['id']
+
+    except HttpError as error:
+        logging.error(f"An error occurred while finding folder '{folder_name}': {error}")
+        return None
+
+
+def cleanup_old_files_on_drive(drive_service):
+    """
+    Deletes files older than GDRIVE_RETENTION_DAYS from Google Drive and cleans up empty parent folders.
+    """
+    if GDRIVE_RETENTION_DAYS == 0:
+        logging.info("GDRIVE_RETENTION_DAYS is set to 0, skipping cleanup.")
+        return
+
+    logging.info(f"Starting cleanup of files older than {GDRIVE_RETENTION_DAYS} days on Google Drive...")
+
+    try:
+        # Calculate the cutoff date
+        cutoff_date = datetime.now() - timedelta(days=GDRIVE_RETENTION_DAYS)
+        cutoff_iso = cutoff_date.isoformat() + 'Z'
+
+        # Find the root upload folder first
+        upload_dir_name = os.getenv('UPLOAD_DIR', 'Frigate')
+        folder_id = get_folder_id(drive_service, upload_dir_name, 'root')
+        if not folder_id:
+            logging.warning(f"Root upload folder '{upload_dir_name}' not found. Cannot perform cleanup.")
+            return
+
+        # Find and delete old files recursively. The 'trashed=false' is crucial.
+        query = f"mimeType='video/mp4' and trashed=false and createdTime < '{cutoff_iso}'"
+        page_token = None
+        while True:
+            response = drive_service.files().list(q=query,
+                                                  spaces='drive',
+                                                  fields='nextPageToken, files(id, name, parents)',
+                                                  pageToken=page_token).execute()
+            for file in response.get('files', []):
+                file_id = file.get('id')
+                file_name = file.get('name')
+                parent_folders = file.get('parents')
+                logging.info(f"Deleting old file: {file_name} (ID: {file_id})")
+                drive_service.files().delete(fileId=file_id).execute()
+
+                # Cleanup empty parent folders
+                if parent_folders:
+                    cleanup_empty_parent_folders(drive_service, parent_folders[0])
+
+            page_token = response.get('nextPageToken', None)
+            if page_token is None:
+                break
+
+        logging.info("Google Drive cleanup finished.")
+
+    except HttpError as error:
+        logging.error(f'An error occurred during Google Drive cleanup: {error}')
+    except Exception as e:
+        logging.error(f'An unexpected error occurred during Google Drive cleanup: {e}')
+
+
+def cleanup_empty_parent_folders(drive_service, folder_id):
+    """
+    Recursively deletes a folder and its parents if they become empty.
+    """
+    try:
+        # Check if the folder is empty
+        q = f"'{folder_id}' in parents"
+        response = drive_service.files().list(q=q, spaces='drive', fields='files(id)').execute()
+        if not response.get('files', []):
+            # Get folder details to find its parent
+            folder_details = drive_service.files().get(fileId=folder_id, fields='name, parents').execute()
+            folder_name = folder_details.get('name')
+            parent_folders = folder_details.get('parents')
+
+            logging.info(f"Deleting empty folder: {folder_name} (ID: {folder_id})")
+            drive_service.files().delete(fileId=folder_id).execute()
+
+            # Recursively check the parent folder
+            if parent_folders:
+                cleanup_empty_parent_folders(drive_service, parent_folders[0])
+    except HttpError as error:
+        # It's possible another process deleted it, so we can ignore 'not found' errors
+        if error.resp.status == 404:
+            logging.warning(f"Folder with ID {folder_id} not found, likely already deleted.")
+        else:
+            logging.error(f'An error occurred while cleaning up empty folder {folder_id}: {error}')
 
 
 def upload_to_google_drive(event, frigate_url):
