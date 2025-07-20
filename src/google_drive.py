@@ -40,51 +40,16 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 
 def get_google_service():
     """Initialize and return a Google Drive service with retry support."""
-    # Debug: Print the service account file path and check if it exists
-    logging.info(f"Loading service account from: {SERVICE_ACCOUNT_FILE}")
+    # Initialize credentials
+    if GOOGLE_ACCOUNT_TO_IMPERSONATE:
+        credentials = service_account.Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_FILE, scopes=SCOPES, subject=GOOGLE_ACCOUNT_TO_IMPERSONATE)
+    else:
+        credentials = service_account.Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_FILE, scopes=SCOPES)
     
-    if not os.path.isfile(SERVICE_ACCOUNT_FILE):
-        logging.error(f"Service account file not found at: {SERVICE_ACCOUNT_FILE}")
-        logging.error(f"Current working directory: {os.getcwd()}")
-        logging.error(f"Directory contents: {os.listdir(os.path.dirname(SERVICE_ACCOUNT_FILE))}")
-        raise FileNotFoundError(f"Service account file not found at: {SERVICE_ACCOUNT_FILE}")
-    
-    try:
-        if GOOGLE_ACCOUNT_TO_IMPERSONATE:
-            credentials = service_account.Credentials.from_service_account_file(
-                SERVICE_ACCOUNT_FILE, scopes=SCOPES, subject=GOOGLE_ACCOUNT_TO_IMPERSONATE)
-            logging.info(f"Using service account with impersonation: {GOOGLE_ACCOUNT_TO_IMPERSONATE}")
-        else:
-            credentials = service_account.Credentials.from_service_account_file(
-                SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-            logging.info("Using service account without impersonation")
-    except Exception as e:
-        logging.error(f"Error loading service account credentials: {str(e)}")
-        raise
-
-    # Authorize the credentials with a custom session
-    from google.auth.transport.requests import AuthorizedSession
-    
-    # Configure retry strategy
-    retry_strategy = Retry(
-        total=MAX_RETRIES,
-        backoff_factor=1,
-        status_forcelist=[500, 502, 503, 504, 429],
-        allowed_methods=["GET", "POST", "PUT", "DELETE"]
-    )
-    
-    # Create an HTTP adapter with retry strategy
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    
-    # Create an authorized session with the credentials
-    session = AuthorizedSession(credentials)
-    
-    # Mount the adapter to the session
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    
-    # Build the service with the authorized session
-    return build('drive', 'v3', cache_discovery=False, requestBuilder=lambda *args, **kwargs: session)
+    # Build and return the service
+    return build('drive', 'v3', credentials=credentials, cache_discovery=False)
 
 # Initialize the service
 service = get_google_service()
