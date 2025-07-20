@@ -116,15 +116,21 @@ def handle_all_events():
     latest_start_time = database.get_latest_event_start_time()
     logging.debug(f"Fetching all events from Frigate since {latest_start_time}...")
     all_events = fetch_all_events(FRIGATE_URL, after=latest_start_time, batch_size=100)
-    if all_events:
+
+    if all_events is None:
+        # This indicates a connection error after retries
+        logging.error("Failed to fetch events from Frigate after multiple retries.")
+    elif not all_events:
+        # This is the normal case where there are no new events
+        logging.debug("No new events to process.")
+    else:
+        # Process the fetched events
         logging.debug(f"Received {len(all_events)} events")
         i = 1
         for event in all_events:
             logging.debug(f"Handling event #{i}: {event['id']} in handle_all_events")
             handle_single_event(event)
             i = i + 1
-    else:
-        logging.error("Failed to fetch events from Frigate.")
 
 
 # MQTT Reconnect settings

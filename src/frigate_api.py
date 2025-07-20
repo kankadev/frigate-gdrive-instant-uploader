@@ -30,7 +30,7 @@ def fetch_all_events(frigate_url, after=None, batch_size=100, retries=2, timeout
                     sleep(2)  # Wait a bit before retrying
                 else:
                     logging.error(f"All retries failed for fetching events: {e}")
-                    return all_events  # Return the events fetched so far
+                    return None
 
         if response.status_code == 200:
             events = response.json()
