@@ -1,6 +1,7 @@
 import logging
 import os
 import ssl
+import socket
 import tempfile
 import threading
 import requests
@@ -35,6 +36,9 @@ else:
 
 service = build('drive', 'v3', credentials=credentials)
 
+# Cache for folder IDs to avoid repeated lookups and improve resilience
+_folder_id_cache = {}
+
 # Lock to prevent race conditions when creating folders
 folder_creation_lock = threading.Lock()
 
@@ -46,10 +50,23 @@ def generate_filename(camera_name, start_time, event_id):
 
 
 def find_or_create_folder(name, parent_id=None):
+    """
+    Finds a folder by name and parent_id, creating it if it doesn't exist.
+    Uses a cache to avoid repeated API calls and improve resilience against network errors.
+    """
+    cache_key = (parent_id, name)
+    if cache_key in _folder_id_cache:
+        logging.debug(f"Found folder '{name}' in cache with ID: {_folder_id_cache[cache_key]}")
+        return _folder_id_cache[cache_key]
+
     # Use a lock to prevent race conditions where multiple threads try to create the same folder.
     with folder_creation_lock:
+        # Double-check the cache inside the lock in case another thread populated it while waiting
+        if cache_key in _folder_id_cache:
+            logging.debug(f"Found folder '{name}' in cache (after lock) with ID: {_folder_id_cache[cache_key]}")
+            return _folder_id_cache[cache_key]
+
         try:
-            # More specific query to avoid finding similarly named folders or folders in trash.
             query = f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
             if parent_id:
                 query += f" and '{parent_id}' in parents"
@@ -58,21 +75,23 @@ def find_or_create_folder(name, parent_id=None):
             folders = results.get('files', [])
 
             if not folders:
-                # Folder does not exist, create it.
                 folder_metadata = {
                     'name': name,
                     'mimeType': 'application/vnd.google-apps.folder',
                     'parents': [parent_id] if parent_id else []
                 }
                 folder = service.files().create(body=folder_metadata, fields='id').execute()
-                logging.debug(f"Created folder '{name}' with id {folder.get('id')}")
-                return folder.get('id')
+                folder_id = folder.get('id')
+                logging.debug(f"Created folder '{name}' with ID: {folder_id}")
+                _folder_id_cache[cache_key] = folder_id
+                return folder_id
             else:
-                # Folder already exists, return its ID.
-                logging.debug(f"Found existing folder '{name}' with id {folders[0]['id']}")
-                return folders[0]['id']
+                folder_id = folders[0]['id']
+                logging.debug(f"Found existing folder '{name}' with ID: {folder_id}")
+                _folder_id_cache[cache_key] = folder_id
+                return folder_id
 
-        except HttpError as error:
+        except (HttpError, socket.timeout) as error:
             logging.error(f"An error occurred while finding or creating folder '{name}': {error}")
             return None
 
