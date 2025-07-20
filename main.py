@@ -11,26 +11,35 @@ import socket
 os.makedirs('logs', exist_ok=True)
 
 # Konfiguriere das Logging zuerst
-LOGGING_LEVEL = os.getenv('LOGGING_LEVEL', 'DEBUG').upper()
-NUMERIC_LEVEL = getattr(logging, LOGGING_LEVEL, logging.DEBUG)
-if not isinstance(NUMERIC_LEVEL, int):
-    print(f"Ungültiges Log-Level: {LOGGING_LEVEL}, verwende DEBUG")
-    NUMERIC_LEVEL = logging.DEBUG
+LOGGING_LEVEL = os.getenv('LOGGING_LEVEL', 'INFO').upper()
+
+# Mögliche Log-Level mit Standardwerten
+LOG_LEVELS = {
+    'DEBUG': logging.DEBUG,
+    'INFO': logging.INFO,
+    'WARNING': logging.WARNING,
+    'ERROR': logging.ERROR,
+    'CRITICAL': logging.CRITICAL
+}
+
+# Wähle das Log-Level aus der Umgebungsvariable oder verwende INFO als Standard
+NUMERIC_LEVEL = LOG_LEVELS.get(LOGGING_LEVEL, logging.INFO)
+print(f"Aktuelles Log-Level: {LOGGING_LEVEL} (numerisch: {NUMERIC_LEVEL})")
 
 # Root-Logger konfigurieren
 root_logger = logging.getLogger()
-root_logger.setLevel(NUMERIC_LEVEL)
+root_logger.setLevel(NUMERIC_LEVEL)  # Wichtig: Dies setzt das minimale Level für den Root-Logger
 
 # Bestehende Handler entfernen
 for handler in root_logger.handlers[:]:
     root_logger.removeHandler(handler)
+    handler.close()
 
 # Konsole-Handler
 console_handler = logging.StreamHandler()
-console_handler.setLevel(NUMERIC_LEVEL)
+console_handler.setLevel(NUMERIC_LEVEL)  # Level für die Konsole
 console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(console_formatter)
-root_logger.addHandler(console_handler)
 
 # Datei-Handler
 log_file = 'logs/app.log'
@@ -40,10 +49,16 @@ file_handler = RotatingFileHandler(
     backupCount=5,
     encoding='utf-8'
 )
-file_handler.setLevel(NUMERIC_LEVEL)
+file_handler.setLevel(NUMERIC_LEVEL)  # Level für die Datei
 file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 file_handler.setFormatter(file_formatter)
+
+# Handler hinzufügen
+root_logger.addHandler(console_handler)
 root_logger.addHandler(file_handler)
+
+# Deaktiviere die Propagation zu anderen Loggern, um doppelte Logs zu vermeiden
+root_logger.propagate = False
 
 # Logger für dieses Modul
 logger = logging.getLogger(__name__)
