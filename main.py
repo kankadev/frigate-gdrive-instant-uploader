@@ -95,6 +95,9 @@ def handle_single_event(event_data):
         else:
             uploaded_status = database.select_event_uploaded(event_id)
             if uploaded_status == 0 or uploaded_status is None:
+                # Wait a few seconds to give Frigate time to finish writing the file to disk
+                logging.debug("Waiting 5 seconds for Frigate to finalize the clip...")
+                time.sleep(5)
                 logging.debug(f"Uploading video {event_id} to Google Drive...")
                 success = google_drive.upload_to_google_drive(event_data, FRIGATE_URL)
                 if success:
