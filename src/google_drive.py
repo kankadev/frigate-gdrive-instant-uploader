@@ -18,7 +18,8 @@ from src.frigate_api import generate_video_url
 load_dotenv()
 
 UPLOAD_DIR = os.getenv('UPLOAD_DIR')
-TIMEZONE = os.getenv('TIMEZONE', 'Europe/Istanbul')
+# Prioritize standard 'TZ' env var, but fall back to 'TIMEZONE' for backward compatibility.
+TIMEZONE = os.getenv('TZ', os.getenv('TIMEZONE', 'Europe/Istanbul'))
 SERVICE_ACCOUNT_FILE = os.getenv('SERVICE_ACCOUNT_FILE')
 GOOGLE_ACCOUNT_TO_IMPERSONATE = os.getenv('GOOGLE_ACCOUNT_TO_IMPERSONATE')
 
