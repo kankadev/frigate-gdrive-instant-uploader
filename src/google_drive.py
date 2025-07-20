@@ -40,16 +40,39 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 
 def get_google_service():
     """Initialize and return a Google Drive service with retry support."""
-    # Initialize credentials
-    if GOOGLE_ACCOUNT_TO_IMPERSONATE:
-        credentials = service_account.Credentials.from_service_account_file(
-            SERVICE_ACCOUNT_FILE, scopes=SCOPES, subject=GOOGLE_ACCOUNT_TO_IMPERSONATE)
-    else:
-        credentials = service_account.Credentials.from_service_account_file(
-            SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-    
-    # Build and return the service
-    return build('drive', 'v3', credentials=credentials, cache_discovery=False)
+    try:
+        # Initialize credentials
+        if GOOGLE_ACCOUNT_TO_IMPERSONATE:
+            credentials = service_account.Credentials.from_service_account_file(
+                SERVICE_ACCOUNT_FILE, scopes=SCOPES, subject=GOOGLE_ACCOUNT_TO_IMPERSONATE)
+            logging.info(f"Using service account with impersonation: {GOOGLE_ACCOUNT_TO_IMPERSONATE}")
+        else:
+            credentials = service_account.Credentials.from_service_account_file(
+                SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+            logging.info("Using service account without impersonation")
+        
+        # Configure retry strategy
+        retry_strategy = Retry(
+            total=MAX_RETRIES,
+            backoff_factor=1,
+            status_forcelist=[500, 502, 503, 504, 429],
+            allowed_methods=["GET", "POST", "PUT", "DELETE"]
+        )
+        
+        # Create a custom session with retry
+        session = requests.Session()
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("https://", adapter)
+        
+        # Build the service with custom HTTP client
+        return build('drive', 'v3', 
+                   credentials=credentials, 
+                   cache_discovery=False,
+                   http=session)
+        
+    except Exception as e:
+        logging.error(f"Error initializing Google Drive service: {str(e)}")
+        raise
 
 # Initialize the service
 service = get_google_service()
