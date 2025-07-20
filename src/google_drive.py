@@ -47,7 +47,10 @@ def get_google_service():
         credentials = service_account.Credentials.from_service_account_file(
             SERVICE_ACCOUNT_FILE, scopes=SCOPES)
 
-    # Configure retry strategy for the HTTP client
+    # Authorize the credentials with a custom session
+    from google.auth.transport.requests import AuthorizedSession
+    
+    # Configure retry strategy
     retry_strategy = Retry(
         total=MAX_RETRIES,
         backoff_factor=1,
@@ -55,16 +58,18 @@ def get_google_service():
         allowed_methods=["GET", "POST", "PUT", "DELETE"]
     )
     
-    # Create a custom HTTP adapter with the retry strategy
+    # Create an HTTP adapter with retry strategy
     adapter = HTTPAdapter(max_retries=retry_strategy)
     
-    # Create a custom HTTP client with the adapter
-    http = requests.Session()
-    http.mount("https://", adapter)
-    http.mount("http://", adapter)
+    # Create an authorized session with the credentials
+    session = AuthorizedSession(credentials)
     
-    # Build the service with the custom HTTP client
-    return build('drive', 'v3', credentials=credentials, cache_discovery=False, http=http)
+    # Mount the adapter to the session
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    
+    # Build the service with the authorized session
+    return build('drive', 'v3', cache_discovery=False, requestBuilder=lambda *args, **kwargs: session)
 
 # Initialize the service
 service = get_google_service()
