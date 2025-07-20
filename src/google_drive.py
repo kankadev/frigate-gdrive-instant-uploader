@@ -51,6 +51,9 @@ def get_google_service():
                 SERVICE_ACCOUNT_FILE, scopes=SCOPES)
             logging.info("Using service account without impersonation")
         
+        # Create an authorized session
+        from google.auth.transport.requests import AuthorizedSession
+        
         # Configure retry strategy
         retry_strategy = Retry(
             total=MAX_RETRIES,
@@ -59,16 +62,18 @@ def get_google_service():
             allowed_methods=["GET", "POST", "PUT", "DELETE"]
         )
         
-        # Create a custom session with retry
-        session = requests.Session()
+        # Create an HTTP adapter with retry strategy
         adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("https://", adapter)
         
-        # Build the service with custom HTTP client
-        return build('drive', 'v3', 
-                   credentials=credentials, 
-                   cache_discovery=False,
-                   http=session)
+        # Create an authorized session with the credentials
+        session = AuthorizedSession(credentials)
+        
+        # Mount the adapter to the session
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        
+        # Build the service with the authorized session
+        return build('drive', 'v3', cache_discovery=False, requestBuilder=lambda *args, **kwargs: session)
         
     except Exception as e:
         logging.error(f"Error initializing Google Drive service: {str(e)}")
