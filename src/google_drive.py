@@ -237,7 +237,9 @@ def exponential_backoff(retries):
     jitter = random.uniform(0, 1)
     return min(INITIAL_RETRY_DELAY * (2 ** (retries - 1)) + jitter, MAX_RETRY_DELAY)
 
-def download_video_with_retry(video_url, max_retries=3):
+EMPTY_VIDEO_RETRY_DELAY = 10  # seconds to wait between retries when video is 0 bytes (Frigate still writing)
+
+def download_video_with_retry(video_url, max_retries=5):
     """Download video with retry logic and proper timeout handling."""
     retry_count = 0
     last_error = None
@@ -264,8 +266,18 @@ def download_video_with_retry(video_url, max_retries=3):
                             if chunk:  # filter out keep-alive new chunks
                                 fh.write(chunk)
                         fh.seek(0)
-                        return fh.read()
+                        data = fh.read()
+                        if not data:
+                            raise ValueError(f"Downloaded video is empty (0 bytes) from {video_url}")
+                        return data
                         
+        except ValueError as e:
+            last_error = e
+            retry_count += 1
+            if retry_count <= max_retries:
+                logging.warning(f"Attempt {retry_count}/{max_retries}: Video still empty, Frigate may still be writing. "
+                                f"Retrying in {EMPTY_VIDEO_RETRY_DELAY}s...")
+                time.sleep(EMPTY_VIDEO_RETRY_DELAY)
         except (requests.RequestException, ssl.SSLError, socket.timeout) as e:
             last_error = e
             retry_count += 1
@@ -309,7 +321,7 @@ def upload_to_google_drive(event, frigate_url):
 
             # 2. Download video with retry logic
             video_data = download_video_with_retry(video_url)
-            if video_data is None:
+            if not video_data:
                 raise Exception(f"Failed to download video from {video_url}")
 
             # 3. Upload to Google Drive with resumable upload
