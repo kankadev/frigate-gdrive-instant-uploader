@@ -21,6 +21,12 @@ from src import database
 from src.frigate_api import generate_video_url
 
 load_dotenv()
+
+# Global lock to serialize Google Drive uploads. The google-auth-httplib2 stack
+# is not thread-safe; concurrent uploads from MQTT + scheduler threads cause
+# SSL record layer failures.
+upload_lock = threading.Lock()
+
 GDRIVE_RETENTION_DAYS = int(os.getenv('GDRIVE_RETENTION_DAYS', 0))
 
 UPLOAD_DIR = os.getenv('UPLOAD_DIR')
@@ -300,86 +306,87 @@ def upload_to_google_drive(event, frigate_url):
     year, month, day = filename.split("__")[0].split("-")[:3]
     video_url = generate_video_url(frigate_url, event_id)
 
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            # 1. Ensure folder structure exists
-            frigate_folder_id = find_or_create_folder(UPLOAD_DIR)
-            if not frigate_folder_id:
-                raise Exception(f"Failed to find or create folder: {UPLOAD_DIR}")
+    with upload_lock:
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                # 1. Ensure folder structure exists
+                frigate_folder_id = find_or_create_folder(UPLOAD_DIR)
+                if not frigate_folder_id:
+                    raise Exception(f"Failed to find or create folder: {UPLOAD_DIR}")
 
-            year_folder_id = find_or_create_folder(year, frigate_folder_id)
-            if not year_folder_id:
-                raise Exception(f"Failed to find or create folder: {year}")
+                year_folder_id = find_or_create_folder(year, frigate_folder_id)
+                if not year_folder_id:
+                    raise Exception(f"Failed to find or create folder: {year}")
 
-            month_folder_id = find_or_create_folder(month, year_folder_id)
-            if not month_folder_id:
-                raise Exception(f"Failed to find or create folder: {month}")
+                month_folder_id = find_or_create_folder(month, year_folder_id)
+                if not month_folder_id:
+                    raise Exception(f"Failed to find or create folder: {month}")
 
-            day_folder_id = find_or_create_folder(day, month_folder_id)
-            if not day_folder_id:
-                raise Exception(f"Failed to find or create folder: {day}")
+                day_folder_id = find_or_create_folder(day, month_folder_id)
+                if not day_folder_id:
+                    raise Exception(f"Failed to find or create folder: {day}")
 
-            # 2. Download video with retry logic
-            video_data = download_video_with_retry(video_url)
-            if not video_data:
-                raise Exception(f"Failed to download video from {video_url}")
+                # 2. Download video with retry logic
+                video_data = download_video_with_retry(video_url)
+                if not video_data:
+                    raise Exception(f"Failed to download video from {video_url}")
 
-            # 3. Upload to Google Drive with resumable upload
-            media = MediaIoBaseUpload(
-                io.BytesIO(video_data),
-                mimetype='video/mp4',
-                resumable=True,
-                chunksize=UPLOAD_CHUNK_SIZE
-            )
-            
-            file_metadata = {
-                'name': filename,
-                'parents': [day_folder_id]
-            }
+                # 3. Upload to Google Drive with resumable upload
+                media = MediaIoBaseUpload(
+                    io.BytesIO(video_data),
+                    mimetype='video/mp4',
+                    resumable=True,
+                    chunksize=UPLOAD_CHUNK_SIZE
+                )
 
-            request = service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id',
-                supportsAllDrives=True
-            )
-            
-            response = None
-            while response is None:
-                status, response = request.next_chunk()
-                if status:
-                    logging.debug(f"Upload progress: {int(status.progress() * 100)}%")
-            
-            if 'id' in response:
-                logging.info(f"Video {filename} successfully uploaded to Google Drive with ID: {response['id']}.")
-                return True
-            else:
-                raise Exception("No file ID returned from Google Drive")
+                file_metadata = {
+                    'name': filename,
+                    'parents': [day_folder_id]
+                }
 
-        except HttpError as error:
-            if attempt < MAX_RETRIES and error.resp.status in [500, 502, 503, 504, 429]:
-                wait_time = exponential_backoff(attempt + 1)
-                logging.warning(f"Attempt {attempt + 1}/{MAX_RETRIES} failed with status {error.resp.status}. "
-                              f"Retrying in {wait_time:.2f}s. Error: {error}")
-                time.sleep(wait_time)
-                continue
-            logging.error(f"HTTP error uploading to Google Drive: {error}")
-            return False
-            
-        except (requests.RequestException, ssl.SSLError, socket.timeout, socket.error) as e:
-            if attempt < MAX_RETRIES:
-                wait_time = exponential_backoff(attempt + 1)
-                logging.warning(f"Attempt {attempt + 1}/{MAX_RETRIES} failed. Retrying in {wait_time:.2f}s. Error: {e}")
-                time.sleep(wait_time)
-                continue
-            logging.error(f"Error in upload process: {e}", exc_info=True)
-            return False
-            
-        except Exception as e:
-            logging.error(f"Unexpected error: {e}", exc_info=True)
-            return False
-    
-    logging.error(f"Failed to upload after {MAX_RETRIES + 1} attempts")
-    return False
+                request = service.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id',
+                    supportsAllDrives=True
+                )
+
+                response = None
+                while response is None:
+                    status, response = request.next_chunk()
+                    if status:
+                        logging.debug(f"Upload progress: {int(status.progress() * 100)}%")
+
+                if 'id' in response:
+                    logging.info(f"Video {filename} successfully uploaded to Google Drive with ID: {response['id']}.")
+                    return True
+                else:
+                    raise Exception("No file ID returned from Google Drive")
+
+            except HttpError as error:
+                if attempt < MAX_RETRIES and error.resp.status in [500, 502, 503, 504, 429]:
+                    wait_time = exponential_backoff(attempt + 1)
+                    logging.warning(f"Attempt {attempt + 1}/{MAX_RETRIES} failed with status {error.resp.status}. "
+                                    f"Retrying in {wait_time:.2f}s. Error: {error}")
+                    time.sleep(wait_time)
+                    continue
+                logging.error(f"HTTP error uploading to Google Drive: {error}")
+                return False
+
+            except (requests.RequestException, ssl.SSLError, socket.timeout, socket.error) as e:
+                if attempt < MAX_RETRIES:
+                    wait_time = exponential_backoff(attempt + 1)
+                    logging.warning(f"Attempt {attempt + 1}/{MAX_RETRIES} failed. Retrying in {wait_time:.2f}s. Error: {e}")
+                    time.sleep(wait_time)
+                    continue
+                logging.error(f"Error in upload process: {e}", exc_info=True)
+                return False
+
+            except Exception as e:
+                logging.error(f"Unexpected error: {e}", exc_info=True)
+                return False
+
+        logging.error(f"Failed to upload after {MAX_RETRIES + 1} attempts")
+        return False
 
 
