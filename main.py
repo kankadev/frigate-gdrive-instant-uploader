@@ -237,8 +237,8 @@ def handle_not_uploaded_events():
                 event_data = fetch_event(FRIGATE_URL, event_id)
                 handle_single_event(event_data, skip_wait=True)
             except EventNotFoundError:
-                logging.error(f"Event {event_id} no longer exists on Frigate. Marking as non-retriable.")
-                database.update_event(event_id, 0, retry=0)
+                logging.warning(f"Event {event_id} no longer exists on Frigate. Removing from database.")
+                database.delete_event(event_id)
             except Exception as e:
                 logging.error(f"Failed to fetch event {event_id} from Frigate for retry: {e}")
                 database.update_event(event_id, 0)

@@ -258,6 +258,22 @@ def select_not_uploaded_yet_hard(db_path=DB_PATH):
         conn.close()
 
 
+def delete_event(event_id, db_path=DB_PATH):
+    """
+    Permanently deletes an event from the database (e.g. when it no longer exists on Frigate).
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM events WHERE event_id = ?', (event_id,))
+        conn.commit()
+        logging.debug(f"Deleted event {event_id} from database")
+    except Exception as e:
+        logging.error(f"Error deleting event {event_id}: {e}")
+    finally:
+        conn.close()
+
+
 def get_latest_event_start_time(db_path=DB_PATH):
     """
     Retrieves the start_time of the most recent event from the database.
