@@ -13,6 +13,9 @@ def init_db(db_path=DB_PATH):
     conn = sqlite3.connect(db_path)
     try:
         cursor = conn.cursor()
+        # Enable WAL mode for safer concurrent access from multiple threads
+        cursor.execute('PRAGMA journal_mode=WAL;')
+        cursor.execute('PRAGMA synchronous=NORMAL;')
         # Create the events table if it does not exist
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS events (

@@ -1,7 +1,8 @@
-FROM python:3.8
+FROM python:3.12-slim
 
 RUN apt-get update && \
-    apt-get install -y nano sqlite3
+    apt-get install -y --no-install-recommends nano sqlite3 && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
