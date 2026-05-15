@@ -70,7 +70,7 @@ import paho.mqtt.client as mqtt
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from src import database, google_drive
-from src.frigate_api import fetch_all_events
+from src.frigate_api import fetch_all_events, fetch_event, EventNotFoundError
 from src.google_drive import cleanup_old_files_on_drive, service
 from src.mattermost_handler import MattermostHandler
 
@@ -125,10 +125,11 @@ def on_message(client, userdata, msg):
                       f"the full message. Skipping...")
 
 
-def handle_single_event(event_data):
+def handle_single_event(event_data, skip_wait=False):
     """
     Handles a single event. Uploads the video to Google Drive if available and updates the database.
     :param event_data:
+    :param skip_wait: If True, skip the 5-second wait (useful for retrying old events).
     :return:
     """
     event_id = event_data['id']
@@ -147,8 +148,9 @@ def handle_single_event(event_data):
             uploaded_status = database.select_event_uploaded(event_id)
             if uploaded_status == 0 or uploaded_status is None:
                 # Wait a few seconds to give Frigate time to finish writing the file to disk
-                logging.debug("Waiting 5 seconds for Frigate to finalize the clip...")
-                time.sleep(5)
+                if not skip_wait:
+                    logging.debug("Waiting 5 seconds for Frigate to finalize the clip...")
+                    time.sleep(5)
                 logging.debug(f"Uploading video {event_id} to Google Drive...")
                 success = google_drive.upload_to_google_drive(event_data, FRIGATE_URL)
                 if success:
@@ -226,9 +228,28 @@ def mqtt_handler():
     client.loop_forever()
 
 
+def handle_not_uploaded_events():
+    event_ids = database.select_not_uploaded_yet()
+    if event_ids:
+        logging.debug(f"Found {len(event_ids)} not uploaded events to retry")
+        for event_id in event_ids:
+            try:
+                event_data = fetch_event(FRIGATE_URL, event_id)
+                handle_single_event(event_data, skip_wait=True)
+            except EventNotFoundError:
+                logging.error(f"Event {event_id} no longer exists on Frigate. Marking as non-retriable.")
+                database.update_event(event_id, 0, retry=0)
+            except Exception as e:
+                logging.error(f"Failed to fetch event {event_id} from Frigate for retry: {e}")
+                database.update_event(event_id, 0)
+    else:
+        logging.debug("No not uploaded events found to retry")
+
+
 def run_every_x_minutes():
     logging.debug("Handling all events and cleaning up old events...")
     handle_all_events()
+    handle_not_uploaded_events()
     database.cleanup_old_events()
 
 

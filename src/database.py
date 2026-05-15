@@ -217,7 +217,7 @@ def select_event_uploaded(event_id, db_path=DB_PATH):
 
 def select_not_uploaded_yet(db_path=DB_PATH):
     """
-    Selects events that are not uploaded yet and where created at least 5 minutes ago.
+    Selects events that are not uploaded yet, retriable, and where created at least 5 minutes ago.
     :param db_path:
     :return:
     """
@@ -225,7 +225,7 @@ def select_not_uploaded_yet(db_path=DB_PATH):
     try:
         cursor = conn.cursor()
         cursor.execute(
-            'SELECT event_id FROM events WHERE uploaded = 0 and created <= datetime("now", "-5 minutes") and tries <= 5')
+            'SELECT event_id FROM events WHERE uploaded = 0 and created <= datetime("now", "-5 minutes") and retry = 1')
         result = cursor.fetchall()
         return [row[0] for row in result]
     except Exception as e:
@@ -237,7 +237,7 @@ def select_not_uploaded_yet(db_path=DB_PATH):
 
 def select_not_uploaded_yet_hard(db_path=DB_PATH):
     """
-    Selects events that are not uploaded yet and have more than 5 tries. Use this e.g. for notifying the user.
+    Selects events that are not uploaded yet and marked as non-retriable (e.g. deleted on Frigate). Use this e.g. for notifying the user.
     :param db_path:
     :return:
     """
@@ -245,7 +245,7 @@ def select_not_uploaded_yet_hard(db_path=DB_PATH):
     try:
         cursor = conn.cursor()
         cursor.execute(
-            'SELECT event_id FROM events WHERE uploaded = 0 and created <= datetime("now", "-5 minutes") and tries >= 5')
+            'SELECT event_id FROM events WHERE uploaded = 0 and created <= datetime("now", "-5 minutes") and retry = 0')
         result = cursor.fetchall()
         return [row[0] for row in result]
     except Exception as e:
