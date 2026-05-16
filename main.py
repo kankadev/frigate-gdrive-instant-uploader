@@ -303,10 +303,10 @@ def daily_health_report():
         f"|---|---|\n"
         f"| Hochgeladen letzte 24h | **{stats['uploaded_last_24h']}** |\n"
         f"| Wartend gesamt | **{stats['pending_total']}** |\n"
-        f"| davon < 1 Tag (normal) | {stats['pending_lt_1d']} |\n"
+        f"| davon unter 1 Tag (normal) | {stats['pending_lt_1d']} |\n"
         f"| davon 1–2 Tage | {stats['pending_1d_2d']} |\n"
         f"| davon 2–3 Tage | {stats['pending_2d_3d']} |\n"
-        f"| davon **> 3 Tage** | **{stats['pending_gt_3d']}** |\n"
+        f"| davon **über 3 Tage** | **{stats['pending_gt_3d']}** |\n"
         f"| Ältestes wartendes Event | {oldest} |\n"
         f"| Insgesamt erfolgreich hochgeladen | {stats['total_uploaded']} |\n"
     )
