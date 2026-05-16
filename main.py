@@ -84,6 +84,7 @@ except Exception as e:
 
 # Konfiguration aus Umgebungsvariablen laden
 FRIGATE_URL = os.getenv('FRIGATE_URL')
+MAX_RETRY_ATTEMPTS = int(os.getenv('MAX_RETRY_ATTEMPTS', '50'))
 MQTT_BROKER_ADDRESS = os.getenv('MQTT_BROKER_ADDRESS')
 MQTT_PORT = int(os.getenv('MQTT_PORT', '1883'))
 MQTT_TOPIC = os.getenv('MQTT_TOPIC')
@@ -178,11 +179,22 @@ def handle_single_event(event_data, skip_wait=False):
                     database.update_event(event_id, 1)
                 else:
                     database.update_event(event_id, 0)
+                    tries = database.select_tries(event_id)
                     # to prevent annoying logs / notifications... Notify only after 3 tries
-                    if database.select_tries(event_id) >= 3:
+                    if tries >= 3:
                         logging.error(
-                            f"Failed to upload video {event_id} (recorded {recorded_at})."
+                            f"Failed to upload video {event_id} (recorded {recorded_at}). "
+                            f"Attempt {tries}/{MAX_RETRY_ATTEMPTS}."
                         )
+                    # Give up after MAX_RETRY_ATTEMPTS tries.
+                    # Set retry=0 so the 10 min job skips it; cleanup_stale_pending_events
+                    # will purge it eventually after STALE_PENDING_DAYS.
+                    if tries >= MAX_RETRY_ATTEMPTS:
+                        logging.error(
+                            f"Giving up on event {event_id} (recorded {recorded_at}) "
+                            f"after {tries} failed attempts. Marked as non-retriable."
+                        )
+                        database.update_event_retry(event_id, 0)
             else:
                 logging.debug(f"Event {event_id} already uploaded. Skipping...")
 
@@ -270,10 +282,11 @@ def handle_not_uploaded_events():
 
 def run_every_x_minutes():
     logging.debug("Handling all events and cleaning up old events...")
-    handle_all_events()
-    handle_not_uploaded_events()
+    # Clean up first so stale entries are not loaded into the retry queue.
     database.cleanup_old_events()
     database.cleanup_stale_pending_events()
+    handle_all_events()
+    handle_not_uploaded_events()
 
 
 def daily_health_report():
