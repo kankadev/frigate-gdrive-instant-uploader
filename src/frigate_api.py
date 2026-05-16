@@ -20,7 +20,7 @@ class ClipNotAvailableError(Exception):
     pass
 
 
-def check_frigate_reachable(frigate_url, timeout=5):
+def check_frigate_reachable(frigate_url, timeout=15):
     """
     Check if Frigate is reachable by hitting the /api/version endpoint.
     Returns True if reachable, False otherwise.
