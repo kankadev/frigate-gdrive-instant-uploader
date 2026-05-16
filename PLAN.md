@@ -186,3 +186,10 @@ Voraussetzungen erfüllt sein:
 - [x] **Job-Reihenfolge getauscht:** `handle_not_uploaded_events()` vor `handle_all_events()`
 - [x] **Verbessertes INFO-Logging:** Start/End-Meldungen für alle Job-Phasen
 - [x] **Frigate Timeouts erhöht:** `check_frigate_reachable` 15s→120s, `fetch_event`/`fetch_all_events` 30s→120s
+- [x] **Download-Timeout tuple:** `(60, 600)` statt fix 300s — erlaubt Streaming ohne Gesamt-Timeout
+- [x] **Frigate nginx-Timeout-Doku:** README beschreibt `proxy_read_timeout` auf 600s erhöhen
+- [x] **Dynamische Retry-Limits pro Event-Dauer:** >3h = 3 Retries, 1-3h = 10, <1h = 30 (MAX_RETRY_ATTEMPTS)
+- [x] **MAX_RETRY_ATTEMPTS default 50→30** (~5h statt ~8h Wartezeit)
+- [x] **Mattermost-Benachrichtigung bei Aufgabe:** Event-Details, Kamera, Label, direkte Clip/Snapshot-URLs
+- [x] **Download-Progress-Logging:** INFO-Level alle 50MB für Diagnose von Freeze-Punkten
+- [x] **ChunkedEncodingError-Diagnose:** README-Doku für "korrupte Frigate-Segmente" hinzugefügt
