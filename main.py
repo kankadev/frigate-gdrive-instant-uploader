@@ -196,6 +196,40 @@ def handle_single_event(event_data, skip_wait=False):
                             f"No further upload attempts will be made for this event."
                         )
                         database.update_event_retry(event_id, 0)
+
+                        # Notify Mattermost with details so the user can grab the clip manually
+                        duration_sec = int(end_time - start_time)
+                        if duration_sec >= 3600:
+                            duration_str = f"{duration_sec // 3600}h {duration_sec % 3600 // 60}m {duration_sec % 60}s"
+                        elif duration_sec >= 60:
+                            duration_str = f"{duration_sec // 60}m {duration_sec % 60}s"
+                        else:
+                            duration_str = f"{duration_sec}s"
+
+                        camera = event_data.get('camera', 'unknown')
+                        label = event_data.get('label', 'unknown')
+                        clip_url = f"{FRIGATE_URL}/api/events/{event_id}/clip.mp4"
+                        snapshot_url = f"{FRIGATE_URL}/api/events/{event_id}/snapshot.jpg"
+
+                        mm_text = (
+                            f"| Metrik | Wert |\n"
+                            f"|---|---|\n"
+                            f"| **Event ID** | `{event_id}` |\n"
+                            f"| **Camera** | {camera} |\n"
+                            f"| **Label** | {label} |\n"
+                            f"| **Recorded** | {recorded_at} |\n"
+                            f"| **Duration** | {duration_str} |\n"
+                            f"| **Failed attempts** | {tries} |\n"
+                            f"| **Clip URL** | [{clip_url}]({clip_url}) |\n"
+                            f"| **Snapshot URL** | [{snapshot_url}]({snapshot_url}) |\n\n"
+                            f"This event has been marked as non-retriable. "
+                            f"You can try downloading the clip manually before it expires on Frigate."
+                        )
+                        send_mattermost_notification(
+                            title=":warning: Upload permanently failed — manual action required",
+                            text=mm_text,
+                            color="#ffae42"
+                        )
                     elif tries == warning_threshold:
                         logging.error(
                             f"{msg} Heads-up: will give up at {MAX_RETRY_ATTEMPTS} attempts."
