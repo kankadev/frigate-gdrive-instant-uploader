@@ -288,7 +288,6 @@ def run_every_x_minutes():
     logging.debug("Handling all events and cleaning up old events...")
     # Clean up first so stale entries are not loaded into the retry queue.
     database.cleanup_old_events()
-    database.cleanup_stale_pending_events()
     handle_all_events()
     handle_not_uploaded_events()
 
