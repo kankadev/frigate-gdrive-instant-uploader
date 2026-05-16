@@ -41,7 +41,7 @@ MAX_RETRIES = 5
 INITIAL_RETRY_DELAY = 1  # seconds
 MAX_RETRY_DELAY = 60  # seconds
 UPLOAD_CHUNK_SIZE = 1024 * 1024 * 10  # 10MB chunks for resumable uploads
-DOWNLOAD_TIMEOUT = (60, 1200)  # (connect_timeout, read_timeout) — allows long streams as long as data flows every 10min
+DOWNLOAD_TIMEOUT = (60, 1200)  # (connect_timeout, read_timeout) — allows long streams as long as data flows
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
