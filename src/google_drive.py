@@ -251,8 +251,9 @@ def download_video_with_retry(video_url, max_retries=5):
     """Download video with retry logic and proper timeout handling."""
     retry_count = 0
     last_error = None
-    
+
     while retry_count <= max_retries:
+        bytes_this_attempt = 0
         try:
             with requests.Session() as session:
                 # Configure retry strategy for the download
@@ -265,7 +266,7 @@ def download_video_with_retry(video_url, max_retries=5):
                 adapter = HTTPAdapter(max_retries=retry_strategy)
                 session.mount("https://", adapter)
                 session.mount("http://", adapter)
-                
+
                 with session.get(video_url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
                     # HTTP 404 is a definitive "clip is gone" signal from Frigate.
                     # HTTP 400 with "No recordings found" means the recordings were
@@ -282,7 +283,7 @@ def download_video_with_retry(video_url, max_retries=5):
                                 f"Clip recordings pruned by Frigate (HTTP 400) for {video_url}: {body}"
                             )
                     response.raise_for_status()
-                    
+
                     with tempfile.TemporaryFile() as fh:
                         total_bytes = 0
                         last_log_bytes = 0
@@ -290,6 +291,7 @@ def download_video_with_retry(video_url, max_retries=5):
                             if chunk:  # filter out keep-alive new chunks
                                 fh.write(chunk)
                                 total_bytes += len(chunk)
+                                bytes_this_attempt += len(chunk)
                                 # Log every 50 MB so we can see progress before timeouts
                                 if total_bytes - last_log_bytes >= 50 * 1024 * 1024:
                                     logging.info(f"Download progress: {total_bytes / (1024*1024):.1f} MB downloaded so far...")
@@ -300,7 +302,7 @@ def download_video_with_retry(video_url, max_retries=5):
                             raise ValueError(f"Downloaded video is empty (0 bytes) from {video_url}")
                         logging.info(f"Download complete: {total_bytes / (1024*1024):.1f} MB total.")
                         return data
-                        
+
         except ValueError as e:
             last_error = e
             retry_count += 1
@@ -310,12 +312,22 @@ def download_video_with_retry(video_url, max_retries=5):
                 time.sleep(EMPTY_VIDEO_RETRY_DELAY)
         except (requests.RequestException, ssl.SSLError, socket.timeout) as e:
             last_error = e
+            # If we've already downloaded significant data and Frigate cut off the stream,
+            # this is a systematic Frigate clip assembly bug (e.g. corrupt segment).
+            # Retrying won't help because Frigate re-assembles from the same source.
+            if bytes_this_attempt > 100 * 1024 * 1024 and "prematurely" in str(e).lower():
+                logging.error(
+                    f"Download aborted after {bytes_this_attempt / (1024*1024):.1f} MB "
+                    f"with 'Response ended prematurely'. This is a systematic Frigate "
+                    f"clip assembly bug, not a network hiccup. Giving up immediately."
+                )
+                break
             retry_count += 1
             if retry_count <= max_retries:
                 wait_time = exponential_backoff(retry_count)
                 logging.warning(f"Attempt {retry_count}/{max_retries} failed ({type(e).__name__}). Retrying in {wait_time:.2f}s. Error: {e}")
                 time.sleep(wait_time)
-    
+
     logging.error(f"Failed to download video from Frigate after {max_retries} attempts. Last error: {last_error}")
     return None
 
