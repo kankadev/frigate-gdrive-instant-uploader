@@ -41,7 +41,7 @@ MAX_RETRIES = 5
 INITIAL_RETRY_DELAY = 1  # seconds
 MAX_RETRY_DELAY = 60  # seconds
 UPLOAD_CHUNK_SIZE = 1024 * 1024 * 10  # 10MB chunks for resumable uploads
-DOWNLOAD_TIMEOUT = (60, 180)  # (connect_timeout, read_timeout) — allows long streams as long as data flows every 3min
+DOWNLOAD_TIMEOUT = (60, 300)  # (connect_timeout, read_timeout) — allows long streams as long as data flows every 5min
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
@@ -284,13 +284,21 @@ def download_video_with_retry(video_url, max_retries=5):
                     response.raise_for_status()
                     
                     with tempfile.TemporaryFile() as fh:
+                        total_bytes = 0
+                        last_log_bytes = 0
                         for chunk in response.iter_content(chunk_size=8192):
                             if chunk:  # filter out keep-alive new chunks
                                 fh.write(chunk)
+                                total_bytes += len(chunk)
+                                # Log every 50 MB so we can see progress before timeouts
+                                if total_bytes - last_log_bytes >= 50 * 1024 * 1024:
+                                    logging.info(f"Download progress: {total_bytes / (1024*1024):.1f} MB downloaded so far...")
+                                    last_log_bytes = total_bytes
                         fh.seek(0)
                         data = fh.read()
                         if not data:
                             raise ValueError(f"Downloaded video is empty (0 bytes) from {video_url}")
+                        logging.info(f"Download complete: {total_bytes / (1024*1024):.1f} MB total.")
                         return data
                         
         except ValueError as e:
@@ -305,10 +313,10 @@ def download_video_with_retry(video_url, max_retries=5):
             retry_count += 1
             if retry_count <= max_retries:
                 wait_time = exponential_backoff(retry_count)
-                logging.warning(f"Attempt {retry_count}/{max_retries} failed. Retrying in {wait_time:.2f}s. Error: {e}")
+                logging.warning(f"Attempt {retry_count}/{max_retries} failed ({type(e).__name__}). Retrying in {wait_time:.2f}s. Error: {e}")
                 time.sleep(wait_time)
     
-    logging.warning(f"Failed to download video after {max_retries} attempts. Last error: {last_error}")
+    logging.error(f"Failed to download video from Frigate after {max_retries} attempts. Last error: {last_error}")
     return None
 
 def upload_to_google_drive(event, frigate_url):
