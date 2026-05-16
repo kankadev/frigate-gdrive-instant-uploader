@@ -72,7 +72,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from src import database, google_drive
 from src.frigate_api import fetch_all_events, fetch_event, EventNotFoundError
 from src.google_drive import cleanup_old_files_on_drive, service
-from src.mattermost_handler import MattermostHandler
+from src.mattermost_handler import MattermostHandler, send_mattermost_notification
 
 # Lade Umgebungsvariablen
 try:
@@ -253,6 +253,76 @@ def run_every_x_minutes():
     database.cleanup_old_events()
 
 
+def daily_health_report():
+    """
+    Sends a daily status report to Mattermost.
+    Determines OK / WARNING / CRITICAL based on pending event age and upload activity.
+    """
+    logging.debug("Generating daily health report...")
+    try:
+        stats = database.get_health_stats()
+    except Exception as e:
+        logging.error(f"Failed to collect health stats: {e}")
+        send_mattermost_notification(
+            title=":rotating_light: KRITISCH: Health-Report fehlgeschlagen",
+            text=f"Konnte keine Statistik aus der Datenbank lesen.\n\n**Fehler:** `{e}`",
+            color="#d50000",
+        )
+        return
+
+    # Determine severity
+    is_critical = stats["pending_gt_3d"] > 0 or (
+        stats["uploaded_last_24h"] == 0 and stats["pending_total"] > 0
+    )
+    is_warning = (not is_critical) and (
+        stats["pending_2d_3d"] > 0 or stats["pending_1d_2d"] > 10
+    )
+
+    if is_critical:
+        title = ":rotating_light: KRITISCH – Frigate Uploader"
+        color = "#d50000"
+        headline = "**Es gibt Events, die seit über 3 Tagen nicht hochgeladen wurden, oder es lief in den letzten 24h gar nichts.**"
+    elif is_warning:
+        title = ":warning: Warnung – Frigate Uploader"
+        color = "#ffae42"
+        headline = "Es gibt Events, die seit 1–3 Tagen warten. Bitte beobachten."
+    else:
+        title = ":white_check_mark: Frigate Uploader – alles in Ordnung"
+        color = "#36a64f"
+        headline = "Tagesreport: alle Uploads laufen normal."
+
+    oldest = (
+        f"`{stats['oldest_pending_event_id']}` (**{stats['oldest_pending_age_days']} Tage** alt)"
+        if stats["oldest_pending_event_id"]
+        else "_keine_"
+    )
+
+    text = (
+        f"{headline}\n\n"
+        f"| Metrik | Wert |\n"
+        f"|---|---|\n"
+        f"| Hochgeladen letzte 24h | **{stats['uploaded_last_24h']}** |\n"
+        f"| Wartend gesamt | **{stats['pending_total']}** |\n"
+        f"| davon < 1 Tag (normal) | {stats['pending_lt_1d']} |\n"
+        f"| davon 1–2 Tage | {stats['pending_1d_2d']} |\n"
+        f"| davon 2–3 Tage | {stats['pending_2d_3d']} |\n"
+        f"| davon **> 3 Tage** | **{stats['pending_gt_3d']}** |\n"
+        f"| Ältestes wartendes Event | {oldest} |\n"
+        f"| Insgesamt erfolgreich hochgeladen | {stats['total_uploaded']} |\n"
+    )
+
+    if is_critical:
+        text += (
+            "\n**Empfohlene Aktionen:**\n"
+            "- Logs des Containers prüfen: `docker logs frigate-gdrive-instant-uploader --tail 200`\n"
+            "- DB-Zustand prüfen: `SELECT date(created), COUNT(*) FROM events WHERE uploaded=0 GROUP BY 1;`\n"
+            "- Frigate-Erreichbarkeit & Internet überprüfen\n"
+        )
+
+    send_mattermost_notification(title=title, text=text, color=color)
+    logging.info(f"Health report sent: {title}")
+
+
 def run_every_6_hours():
     logging.debug("Handling failed events...")
     failed_events = database.select_not_uploaded_yet_hard()
@@ -293,6 +363,7 @@ def main():
     scheduler.add_job(run_every_x_minutes, 'interval', minutes=10)
     scheduler.add_job(run_every_6_hours, 'interval', hours=6)
     scheduler.add_job(lambda: cleanup_old_files_on_drive(service), 'interval', days=1)
+    scheduler.add_job(daily_health_report, 'cron', hour=9, minute=0)
     scheduler.start()
 
     try:

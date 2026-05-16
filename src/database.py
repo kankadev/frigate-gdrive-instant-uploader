@@ -291,6 +291,82 @@ def get_latest_event_start_time(db_path=DB_PATH):
         conn.close()
 
 
+def get_health_stats(db_path=DB_PATH):
+    """
+    Returns a dict with statistics for the daily health report:
+      - uploaded_last_24h: events successfully uploaded in last 24h
+      - pending_total: events with uploaded=0
+      - pending_lt_1d: pending events created in last 24h
+      - pending_1d_2d: pending events 1-2 days old
+      - pending_2d_3d: pending events 2-3 days old
+      - pending_gt_3d: pending events older than 3 days (critical)
+      - oldest_pending_age_days: age in days of oldest pending event (None if none)
+      - oldest_pending_event_id: id of oldest pending event (None if none)
+      - total_uploaded: total successfully uploaded events ever
+    """
+    stats = {
+        "uploaded_last_24h": 0,
+        "pending_total": 0,
+        "pending_lt_1d": 0,
+        "pending_1d_2d": 0,
+        "pending_2d_3d": 0,
+        "pending_gt_3d": 0,
+        "oldest_pending_age_days": None,
+        "oldest_pending_event_id": None,
+        "total_uploaded": 0,
+    }
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM events WHERE uploaded = 1 AND created >= datetime('now', '-1 day')"
+        )
+        stats["uploaded_last_24h"] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM events WHERE uploaded = 1")
+        stats["total_uploaded"] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM events WHERE uploaded = 0")
+        stats["pending_total"] = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM events WHERE uploaded = 0 AND created >= datetime('now', '-1 day')"
+        )
+        stats["pending_lt_1d"] = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM events WHERE uploaded = 0 "
+            "AND created < datetime('now', '-1 day') AND created >= datetime('now', '-2 day')"
+        )
+        stats["pending_1d_2d"] = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM events WHERE uploaded = 0 "
+            "AND created < datetime('now', '-2 day') AND created >= datetime('now', '-3 day')"
+        )
+        stats["pending_2d_3d"] = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM events WHERE uploaded = 0 AND created < datetime('now', '-3 day')"
+        )
+        stats["pending_gt_3d"] = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT event_id, CAST((julianday('now') - julianday(created)) AS REAL) "
+            "FROM events WHERE uploaded = 0 ORDER BY created ASC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if row:
+            stats["oldest_pending_event_id"] = row[0]
+            stats["oldest_pending_age_days"] = round(row[1], 1)
+    except Exception as e:
+        logging.error(f"Error collecting health stats: {e}")
+    finally:
+        conn.close()
+    return stats
+
+
 def cleanup_old_events(db_path=DB_PATH):
     """
     Deletes uploaded events that are older than the configured retention period.
