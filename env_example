@@ -9,15 +9,18 @@ LOGGING_LEVEL=DEBUG
 # Set to 0 to disable automatic deletion.
 GDRIVE_RETENTION_DAYS=0
 
-# Optional: How long to keep pending (uploaded=0) events in the local SQLite DB
-# before giving up on them. Should be safely larger than your Frigate retention
-# (typically 14 days). Default: 30 days.
-STALE_PENDING_DAYS=30
+# Optional: How long to keep events in the local SQLite DB, regardless of whether
+# they were uploaded or not. After this period the row is deleted (the file in
+# Google Drive is not affected - it stays there). Should be safely larger than
+# your Frigate clip retention (typically 14 days). Default: 30 days.
+# Legacy variables EVENT_RETENTION_DAYS and STALE_PENDING_DAYS are still
+# respected as fallbacks for backwards compatibility.
+DB_RETENTION_DAYS=30
 
 # Optional: After how many failed upload attempts an event is marked as
 # non-retriable (retry=0). At a 10-minute retry interval, 50 attempts equal
 # about 8 hours of trying. After that the event is no longer touched but stays
-# in the DB until STALE_PENDING_DAYS deletes it. Default: 50.
+# in the DB until DB_RETENTION_DAYS deletes it. Default: 50.
 MAX_RETRY_ATTEMPTS=50
 
 # MQTT

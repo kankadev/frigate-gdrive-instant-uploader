@@ -5,7 +5,20 @@ from dotenv import load_dotenv
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'db/events.db')
 load_dotenv()
-EVENT_RETENTION_DAYS = int(os.getenv('EVENT_RETENTION_DAYS', 40))
+
+# Single retention period for the local SQLite DB.
+# After DB_RETENTION_DAYS days an event is removed regardless of upload status:
+#   - uploaded=1: Drive file remains; the DB row served only as a dedup marker.
+#   - uploaded=0: Frigate's typical retention is 14 days, so after DB_RETENTION_DAYS
+#     the clip is definitively gone and retrying is pointless.
+# Backwards-compat: respect the legacy EVENT_RETENTION_DAYS / STALE_PENDING_DAYS
+# variables if either is set; otherwise default to 30 days.
+DB_RETENTION_DAYS = int(
+    os.getenv(
+        'DB_RETENTION_DAYS',
+        os.getenv('STALE_PENDING_DAYS', os.getenv('EVENT_RETENTION_DAYS', '30'))
+    )
+)
 
 
 def init_db(db_path=DB_PATH):
@@ -369,50 +382,39 @@ def get_health_stats(db_path=DB_PATH):
 
 def cleanup_old_events(db_path=DB_PATH):
     """
-    Deletes uploaded events that are older than the configured retention period.
-    :param db_path:
-    :return:
+    Deletes ALL events older than DB_RETENTION_DAYS, regardless of upload status.
+    Returns the number of deleted rows split by status: (uploaded_deleted, pending_deleted).
     """
     conn = sqlite3.connect(db_path)
+    uploaded_deleted = 0
+    pending_deleted = 0
     try:
         cursor = conn.cursor()
         cursor.execute(
-            'DELETE FROM events WHERE created <= datetime("now", ? || " days") and uploaded = 1',
-            (f"-{EVENT_RETENTION_DAYS}",)
+            'SELECT '
+            '  SUM(CASE WHEN uploaded = 1 THEN 1 ELSE 0 END), '
+            '  SUM(CASE WHEN uploaded = 0 THEN 1 ELSE 0 END) '
+            'FROM events WHERE created <= datetime("now", ? || " days")',
+            (f"-{DB_RETENTION_DAYS}",)
+        )
+        row = cursor.fetchone()
+        uploaded_deleted = row[0] or 0
+        pending_deleted = row[1] or 0
+
+        cursor.execute(
+            'DELETE FROM events WHERE created <= datetime("now", ? || " days")',
+            (f"-{DB_RETENTION_DAYS}",)
         )
         conn.commit()
+
+        total = uploaded_deleted + pending_deleted
+        if total:
+            logging.info(
+                f"Cleaned up {total} events older than {DB_RETENTION_DAYS} days "
+                f"({uploaded_deleted} uploaded, {pending_deleted} pending)."
+            )
     except Exception as e:
         logging.error(f"Error cleaning up old events: {e}")
     finally:
         conn.close()
-
-
-STALE_PENDING_DAYS = int(os.getenv('STALE_PENDING_DAYS', 30))
-
-
-def cleanup_stale_pending_events(db_path=DB_PATH):
-    """
-    Deletes never-uploaded events older than STALE_PENDING_DAYS days.
-    These are events whose clips are no longer available on Frigate (the typical
-    retention is 14 days, so 30+ days is a very safe default).
-    Returns the number of deleted rows.
-    """
-    conn = sqlite3.connect(db_path)
-    deleted = 0
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            'DELETE FROM events WHERE uploaded = 0 AND created <= datetime("now", ? || " days")',
-            (f"-{STALE_PENDING_DAYS}",)
-        )
-        deleted = cursor.rowcount
-        conn.commit()
-        if deleted:
-            logging.warning(
-                f"Cleaned up {deleted} stale pending events (older than {STALE_PENDING_DAYS} days)."
-            )
-    except Exception as e:
-        logging.error(f"Error cleaning up stale pending events: {e}")
-    finally:
-        conn.close()
-    return deleted
+    return uploaded_deleted, pending_deleted
