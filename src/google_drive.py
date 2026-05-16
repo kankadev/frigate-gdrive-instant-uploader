@@ -300,7 +300,7 @@ def download_video_with_retry(video_url, max_retries=5):
                 logging.warning(f"Attempt {retry_count}/{max_retries} failed. Retrying in {wait_time:.2f}s. Error: {e}")
                 time.sleep(wait_time)
     
-    logging.error(f"Failed to download video after {max_retries} attempts. Last error: {last_error}")
+    logging.warning(f"Failed to download video after {max_retries} attempts. Last error: {last_error}")
     return None
 
 def upload_to_google_drive(event, frigate_url):
@@ -383,7 +383,7 @@ def upload_to_google_drive(event, frigate_url):
                                     f"Retrying in {wait_time:.2f}s. Error: {error}")
                     time.sleep(wait_time)
                     continue
-                logging.error(f"HTTP error uploading to Google Drive: {error}")
+                logging.warning(f"HTTP error uploading to Google Drive: {error}")
                 return False
 
             except (requests.RequestException, ssl.SSLError, socket.timeout, socket.error) as e:
@@ -392,14 +392,14 @@ def upload_to_google_drive(event, frigate_url):
                     logging.warning(f"Attempt {attempt + 1}/{MAX_RETRIES} failed. Retrying in {wait_time:.2f}s. Error: {e}")
                     time.sleep(wait_time)
                     continue
-                logging.error(f"Error in upload process: {e}", exc_info=True)
+                logging.warning(f"Error in upload process: {e}")
                 return False
 
             except Exception as e:
-                logging.error(f"Unexpected error: {e}", exc_info=True)
+                logging.warning(f"Unexpected error during upload: {e}")
                 return False
 
-        logging.error(f"Failed to upload after {MAX_RETRIES + 1} attempts")
+        logging.warning(f"Failed to upload after {MAX_RETRIES + 1} attempts")
         return False
 
 

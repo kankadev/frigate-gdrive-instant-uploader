@@ -180,21 +180,25 @@ def handle_single_event(event_data, skip_wait=False):
                 else:
                     database.update_event(event_id, 0)
                     tries = database.select_tries(event_id)
-                    # to prevent annoying logs / notifications... Notify only after 3 tries
-                    if tries >= 3:
-                        logging.error(
-                            f"Failed to upload video {event_id} (recorded {recorded_at}). "
-                            f"Attempt {tries}/{MAX_RETRY_ATTEMPTS}."
-                        )
-                    # Give up after MAX_RETRY_ATTEMPTS tries.
-                    # Set retry=0 so the 10 min job skips it; cleanup_stale_pending_events
-                    # will purge it eventually after STALE_PENDING_DAYS.
+                    msg = (
+                        f"Failed to upload video {event_id} (recorded {recorded_at}). "
+                        f"Attempt {tries}/{MAX_RETRY_ATTEMPTS}."
+                    )
+                    # Notification policy to avoid spamming Mattermost:
+                    # - tries 1-3: ERROR (Mattermost gets notified - early warning)
+                    # - tries 4..MAX_RETRY_ATTEMPTS-1: WARNING (file log only, no Mattermost)
+                    # - tries == MAX_RETRY_ATTEMPTS: ERROR (final give-up notification)
                     if tries >= MAX_RETRY_ATTEMPTS:
                         logging.error(
                             f"Giving up on event {event_id} (recorded {recorded_at}) "
-                            f"after {tries} failed attempts. Marked as non-retriable."
+                            f"after {tries} failed attempts. Marked as non-retriable. "
+                            f"No further upload attempts will be made for this event."
                         )
                         database.update_event_retry(event_id, 0)
+                    elif tries >= 3 and tries <= 5:
+                        logging.error(msg)
+                    else:
+                        logging.warning(msg)
             else:
                 logging.debug(f"Event {event_id} already uploaded. Skipping...")
 
