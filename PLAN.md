@@ -105,6 +105,69 @@ Schritt es jeweils gescheitert ist (Download? Upload? Auth?).
 
 ---
 
+## 7. Maximale Event-Dauer für Uploads
+
+**Status:** offen
+**Priorität:** mittel
+
+Events mit extrem langen Dauern (z.B. 5+ Stunden bei "stationary objects"
+wie schlafende Katzen) erzeugen riesige Clips. Frigate braucht Minuten,
+um diese zusammenzusetzen, und blockiert dabei die API. Der Upload-Loop
+steht still.
+
+**Vorschlag:** Konfigurierbarer Parameter `SKIP_EVENTS_LONGER_THAN_SECONDS`
+(Default z.B. 7200s = 2h). Events, die länger dauern, als `retry=0`
+markieren (nicht löschen, damit die Metadaten erhalten bleiben).
+
+**Aufwand:** klein.
+
+**Nutzen:** Loop hängt nicht mehr an 5-Stunden-Events, deutlich schnellerer
+Durchsatz bei Backlogs.
+
+---
+
+## 8. `fetch_all_events` als Generator (Streaming)
+
+**Status:** offen
+**Priorität:** niedrig
+
+`fetch_all_events()` in `src/frigate_api.py` lädt aktuell ALLE Events
+in eine Python-Liste. Bei 24.000+ Events kann das viel Memory fressen.
+
+**Vorschlag:** Funktion in Generator umwandeln (`yield` statt
+`all_events.append()`), damit Events als Stream verarbeitet werden
+und der Memory-Footprint konstant bleibt.
+
+**Aufwand:** klein (nur `return all_events` → `yield event` pro Batch).
+
+**Nutzen:** konstanter Memory-Verbrauch, unabhängig von Event-Anzahl.
+
+---
+
+## 9. Threading / Parallel-Uploads (mit SQLite-Warnung)
+
+**Status:** offen
+**Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
+
+Parallele Uploads könnten den Durchsatz massiv erhöhen, da der Upload
+meistens I/O-bound ist (Frigate-Download + Google Drive-Upload).
+
+**WICHTIG / WARNUNG:**
+Das Tool hatte früher Threading, das wurde aber wieder zurückgebaut, weil
+**konkurrierende Zugriffe auf SQLite** zu `database is locked`-Fehlern
+führten. Vor einer Wiedereinführung von Threading müssen folgende
+Voraussetzungen erfüllt sein:
+- SQLite WAL-Mode ist aktiv (✅ bereits erledigt)
+- Jeder Thread bekommt eine **eigene DB-Connection** (kein Connection-Sharing)
+- ODER: ein **dedizierter DB-Worker-Thread** mit Queue (Producer-Consumer-Muster)
+- ODER: Umstieg auf eine echte Concurrency-fähige DB (z.B. PostgreSQL)
+
+**Aufwand:** mittel bis hoch (abhängig von gewählter Architektur).
+
+**Nutzen:** Bei 374+ Backlog-Events wäre Parallel-Upload ein Gamechanger.
+
+---
+
 ## Done
 
 - [x] Interval-Jobs starten 90s nach Container-Start (kein 10-Minuten-Blindflug nach Neustart)
@@ -118,3 +181,8 @@ Schritt es jeweils gescheitert ist (Download? Upload? Auth?).
 - [x] Upload-Lock gegen SSL-Race-Conditions
 - [x] SQLite WAL-Mode für Concurrency
 - [x] Python 3.12 + gepinnte Dependencies
+- [x] **Retry-Queue FIFO:** `ORDER BY created ASC` in `select_not_uploaded_yet()`
+- [x] **HTTP 400 "No recordings found" → permanent failure:** `ClipNotAvailableError` + Auto-Delete
+- [x] **Job-Reihenfolge getauscht:** `handle_not_uploaded_events()` vor `handle_all_events()`
+- [x] **Verbessertes INFO-Logging:** Start/End-Meldungen für alle Job-Phasen
+- [x] **Frigate Timeouts erhöht:** `check_frigate_reachable` 15s→120s, `fetch_event`/`fetch_all_events` 30s→120s
