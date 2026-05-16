@@ -287,7 +287,7 @@ def download_video_with_retry(video_url, max_retries=5):
                     with tempfile.TemporaryFile() as fh:
                         total_bytes = 0
                         last_log_bytes = 0
-                        for chunk in response.iter_content(chunk_size=262144):
+                        for chunk in response.iter_content(chunk_size=8192):
                             if chunk:  # filter out keep-alive new chunks
                                 fh.write(chunk)
                                 total_bytes += len(chunk)
