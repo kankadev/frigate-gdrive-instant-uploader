@@ -20,7 +20,7 @@ class ClipNotAvailableError(Exception):
     pass
 
 
-def check_frigate_reachable(frigate_url, timeout=15):
+def check_frigate_reachable(frigate_url, timeout=120):
     """
     Check if Frigate is reachable by hitting the /api/version endpoint.
     Returns True if reachable, False otherwise.
@@ -36,7 +36,7 @@ def generate_video_url(frigate_url, event_id):
     return f"{frigate_url}/api/events/{event_id}/clip.mp4"
 
 
-def fetch_event(frigate_url, event_id, retries=2, timeout=30):
+def fetch_event(frigate_url, event_id, retries=2, timeout=120):
     for attempt in range(retries):
         try:
             response = requests.get(f'{frigate_url}/api/events/{event_id}', timeout=timeout)
@@ -55,7 +55,7 @@ def fetch_event(frigate_url, event_id, retries=2, timeout=30):
                 raise FrigateUnreachableError(f"Frigate unreachable: {e}")
 
 
-def fetch_all_events(frigate_url, after=None, batch_size=100, retries=2, timeout=30):
+def fetch_all_events(frigate_url, after=None, batch_size=100, retries=2, timeout=120):
     all_events = []
     before = None
 
