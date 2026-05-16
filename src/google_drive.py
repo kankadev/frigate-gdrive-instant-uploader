@@ -328,7 +328,7 @@ def download_video_with_retry(video_url, max_retries=5):
                 logging.warning(f"Attempt {retry_count}/{max_retries} failed ({type(e).__name__}). Retrying in {wait_time:.2f}s. Error: {e}")
                 time.sleep(wait_time)
 
-    logging.error(f"Failed to download video from Frigate after {max_retries} attempts. Last error: {last_error}")
+    logging.error(f"Failed to download video from Frigate after {retry_count} attempts. Last error: {last_error}")
     return None
 
 def upload_to_google_drive(event, frigate_url):
