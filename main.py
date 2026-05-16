@@ -316,7 +316,7 @@ def mqtt_handler():
     client.on_connect = on_connect
     client.on_message = on_message
     client.on_disconnect = on_disconnect
-    client.connect(MQTT_BROKER_ADDRESS, MQTT_PORT, 180)
+    client.connect(MQTT_BROKER_ADDRESS, MQTT_PORT, 60)  # 60s keepalive → disconnect detected in ~90s
     client.loop_forever()
 
 
