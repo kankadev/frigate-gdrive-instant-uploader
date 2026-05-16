@@ -164,7 +164,7 @@ def handle_single_event(event_data, skip_wait=False):
                 if not skip_wait:
                     logging.debug("Waiting 5 seconds for Frigate to finalize the clip...")
                     time.sleep(5)
-                logging.debug(f"Uploading video {event_id} (recorded {recorded_at}) to Google Drive...")
+                logging.info(f"Starting upload for event {event_id} (recorded {recorded_at})...")
                 try:
                     success = google_drive.upload_to_google_drive(event_data, FRIGATE_URL)
                 except ClipNotAvailableError as e:
@@ -293,6 +293,7 @@ def handle_not_uploaded_events():
             continue
         consecutive_timeouts = 0
 
+        logging.info(f"Retrying event {event_id}...")
         try:
             event_data = fetch_event(FRIGATE_URL, event_id)
             handle_single_event(event_data, skip_wait=True)
