@@ -4,7 +4,7 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 import socket
 
@@ -399,11 +399,16 @@ def main():
     mqtt_thread.start()
 
     scheduler = BackgroundScheduler()
-    scheduler.add_job(run_every_x_minutes, 'interval', minutes=10)
-    scheduler.add_job(run_every_6_hours, 'interval', hours=6)
-    scheduler.add_job(lambda: cleanup_old_files_on_drive(service), 'interval', days=1)
+    # Run interval jobs shortly after startup so we don't wait a full interval
+    # before the first execution (especially important after container restarts).
+    # 90s gives MQTT/Google auth a moment to settle first.
+    initial_run = datetime.now() + timedelta(seconds=90)
+    scheduler.add_job(run_every_x_minutes, 'interval', minutes=10, next_run_time=initial_run)
+    scheduler.add_job(run_every_6_hours, 'interval', hours=6, next_run_time=initial_run)
+    scheduler.add_job(lambda: cleanup_old_files_on_drive(service), 'interval', days=1, next_run_time=initial_run)
     scheduler.add_job(daily_health_report, 'cron', hour=9, minute=0)
     scheduler.start()
+    logging.info(f"Scheduler started. First interval job run at {initial_run.strftime('%H:%M:%S')}.")
 
     try:
         while True:
