@@ -137,6 +137,20 @@ def format_event_recorded_at(start_time):
         return f"start_time={start_time}"
 
 
+def get_max_retries_for_event(event_data):
+    """
+    Return max retry attempts based on event duration.
+    Long events are more likely to hit systematic Frigate clip assembly bugs
+    that don't resolve with more retries, so we give up faster.
+    """
+    duration_sec = event_data.get('end_time', 0) - event_data.get('start_time', 0)
+    if duration_sec > 3 * 3600:       # > 3 hours
+        return 3   # 3 retries × 10 min = 30 min total wait
+    elif duration_sec > 1 * 3600:     # > 1 hour
+        return 10  # 10 retries × 10 min = 100 min total wait
+    return MAX_RETRY_ATTEMPTS
+
+
 def handle_single_event(event_data, skip_wait=False):
     """
     Handles a single event. Uploads the video to Google Drive if available and updates the database.
@@ -150,6 +164,8 @@ def handle_single_event(event_data, skip_wait=False):
 
     start_time = event_data['start_time']
     recorded_at = format_event_recorded_at(start_time)
+    event_max_retries = get_max_retries_for_event(event_data)
+    duration_sec = int(end_time - start_time)
 
     if not database.is_event_exists(event_id):
         database.insert_event(event_id, start_time)
@@ -182,14 +198,14 @@ def handle_single_event(event_data, skip_wait=False):
                     tries = database.select_tries(event_id)
                     msg = (
                         f"Failed to upload video {event_id} (recorded {recorded_at}). "
-                        f"Attempt {tries}/{MAX_RETRY_ATTEMPTS}."
+                        f"Attempt {tries}/{event_max_retries}."
                     )
                     # Notification policy: send AT MOST two Mattermost messages per event.
-                    # - tries < 80% of MAX_RETRY_ATTEMPTS: WARNING (file log only)
+                    # - tries < 80% of event_max_retries: WARNING (file log only)
                     # - tries == 80% threshold: single ERROR (early heads-up)
-                    # - tries == MAX_RETRY_ATTEMPTS: single ERROR (final give-up)
-                    warning_threshold = max(1, int(MAX_RETRY_ATTEMPTS * 0.8))
-                    if tries >= MAX_RETRY_ATTEMPTS:
+                    # - tries >= event_max_retries: single ERROR (final give-up)
+                    warning_threshold = max(1, int(event_max_retries * 0.8))
+                    if tries >= event_max_retries:
                         logging.error(
                             f"Giving up on event {event_id} (recorded {recorded_at}) "
                             f"after {tries} failed attempts. Marked as non-retriable. "
@@ -198,7 +214,6 @@ def handle_single_event(event_data, skip_wait=False):
                         database.update_event_retry(event_id, 0)
 
                         # Notify Mattermost with details so the user can grab the clip manually
-                        duration_sec = int(end_time - start_time)
                         if duration_sec >= 3600:
                             duration_str = f"{duration_sec // 3600}h {duration_sec % 3600 // 60}m {duration_sec % 60}s"
                         elif duration_sec >= 60:
@@ -232,7 +247,7 @@ def handle_single_event(event_data, skip_wait=False):
                         )
                     elif tries == warning_threshold:
                         logging.error(
-                            f"{msg} Heads-up: will give up at {MAX_RETRY_ATTEMPTS} attempts."
+                            f"{msg} Heads-up: will give up at {event_max_retries} attempts."
                         )
                     else:
                         logging.warning(msg)
