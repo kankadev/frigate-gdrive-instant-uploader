@@ -107,6 +107,7 @@ Schritt es jeweils gescheitert ist (Download? Upload? Auth?).
 
 ## Done
 
+- [x] Interval-Jobs starten 90s nach Container-Start (kein 10-Minuten-Blindflug nach Neustart)
 - [x] Hard-Fail-Cleanup: 404 auf `/api/events/{id}` → Auto-Delete
 - [x] Clip-Cleanup: 404 auf `/clip.mp4` → Auto-Delete
 - [x] Konservativer 400-Umgang: kein Auto-Delete (Datenintegrität)
