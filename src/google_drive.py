@@ -83,10 +83,11 @@ _folder_id_cache = {}
 folder_creation_lock = threading.Lock()
 
 
-def generate_filename(camera_name, start_time, event_id):
+def generate_filename(camera_name, start_time, event_id, label=None):
     utc_time = datetime.fromtimestamp(start_time, pytz.utc)
     local_time = utc_time.astimezone(pytz.timezone(TIMEZONE))
-    return f"{local_time.strftime('%Y-%m-%d-%H-%M-%S')}__{camera_name}__{event_id}.mp4"
+    label_part = f"{label}__" if label else ""
+    return f"{local_time.strftime('%Y-%m-%d-%H-%M-%S')}__{camera_name}__{label_part}{event_id}.mp4"
 
 
 def find_or_create_folder(name, parent_id=None):
@@ -302,7 +303,8 @@ def upload_to_google_drive(event, frigate_url):
     camera_name = event['camera']
     start_time = event['start_time']
     event_id = event['id']
-    filename = generate_filename(camera_name, start_time, event_id)
+    label = event.get('label')
+    filename = generate_filename(camera_name, start_time, event_id, label)
     year, month, day = filename.split("__")[0].split("-")[:3]
     video_url = generate_video_url(frigate_url, event_id)
 
