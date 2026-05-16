@@ -385,3 +385,34 @@ def cleanup_old_events(db_path=DB_PATH):
         logging.error(f"Error cleaning up old events: {e}")
     finally:
         conn.close()
+
+
+STALE_PENDING_DAYS = int(os.getenv('STALE_PENDING_DAYS', 30))
+
+
+def cleanup_stale_pending_events(db_path=DB_PATH):
+    """
+    Deletes never-uploaded events older than STALE_PENDING_DAYS days.
+    These are events whose clips are no longer available on Frigate (the typical
+    retention is 14 days, so 30+ days is a very safe default).
+    Returns the number of deleted rows.
+    """
+    conn = sqlite3.connect(db_path)
+    deleted = 0
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            'DELETE FROM events WHERE uploaded = 0 AND created <= datetime("now", ? || " days")',
+            (f"-{STALE_PENDING_DAYS}",)
+        )
+        deleted = cursor.rowcount
+        conn.commit()
+        if deleted:
+            logging.warning(
+                f"Cleaned up {deleted} stale pending events (older than {STALE_PENDING_DAYS} days)."
+            )
+    except Exception as e:
+        logging.error(f"Error cleaning up stale pending events: {e}")
+    finally:
+        conn.close()
+    return deleted

@@ -18,7 +18,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from src import database
-from src.frigate_api import generate_video_url
+from src.frigate_api import generate_video_url, ClipNotAvailableError
 
 load_dotenv()
 
@@ -266,6 +266,13 @@ def download_video_with_retry(video_url, max_retries=5):
                 session.mount("http://", adapter)
                 
                 with session.get(video_url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
+                    # Only HTTP 404 is a definitive "clip is gone" signal from Frigate.
+                    # HTTP 400 is ambiguous (could be transient), so we keep retrying it
+                    # to make absolutely sure no clip is ever lost.
+                    if response.status_code == 404:
+                        raise ClipNotAvailableError(
+                            f"Clip not available on Frigate (HTTP 404) for {video_url}"
+                        )
                     response.raise_for_status()
                     
                     with tempfile.TemporaryFile() as fh:
@@ -364,6 +371,10 @@ def upload_to_google_drive(event, frigate_url):
                     return True
                 else:
                     raise Exception("No file ID returned from Google Drive")
+
+            except ClipNotAvailableError:
+                # The clip file is gone on Frigate. No retries, propagate to caller for DB cleanup.
+                raise
 
             except HttpError as error:
                 if attempt < MAX_RETRIES and error.resp.status in [500, 502, 503, 504, 429]:

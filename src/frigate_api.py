@@ -9,6 +9,12 @@ class EventNotFoundError(Exception):
     pass
 
 
+class ClipNotAvailableError(Exception):
+    """Raised when the clip file for an event is no longer available on Frigate
+    (HTTP 400/404 on the clip URL). The event metadata may still exist."""
+    pass
+
+
 def generate_video_url(frigate_url, event_id):
     return f"{frigate_url}/api/events/{event_id}/clip.mp4"
 
