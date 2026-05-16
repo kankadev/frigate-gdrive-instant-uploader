@@ -9,6 +9,11 @@ LOGGING_LEVEL=DEBUG
 # Set to 0 to disable automatic deletion.
 GDRIVE_RETENTION_DAYS=0
 
+# Optional: How long to keep pending (uploaded=0) events in the local SQLite DB
+# before giving up on them. Should be safely larger than your Frigate retention
+# (typically 14 days). Default: 30 days.
+STALE_PENDING_DAYS=30
+
 # MQTT
 MQTT_BROKER_ADDRESS=192.168.0.59
 MQTT_TOPIC=frigate/events

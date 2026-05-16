@@ -4,6 +4,7 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 import socket
 
@@ -70,7 +71,7 @@ import paho.mqtt.client as mqtt
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from src import database, google_drive
-from src.frigate_api import fetch_all_events, fetch_event, EventNotFoundError
+from src.frigate_api import fetch_all_events, fetch_event, EventNotFoundError, ClipNotAvailableError
 from src.google_drive import cleanup_old_files_on_drive, service
 from src.mattermost_handler import MattermostHandler, send_mattermost_notification
 
@@ -125,6 +126,16 @@ def on_message(client, userdata, msg):
                       f"the full message. Skipping...")
 
 
+def format_event_recorded_at(start_time):
+    """Returns a human-readable recording timestamp for an event (using TZ env)."""
+    try:
+        import pytz
+        tz = pytz.timezone(os.getenv('TZ', 'UTC'))
+        return datetime.fromtimestamp(start_time, pytz.utc).astimezone(tz).strftime('%Y-%m-%d %H:%M:%S')
+    except Exception:
+        return f"start_time={start_time}"
+
+
 def handle_single_event(event_data, skip_wait=False):
     """
     Handles a single event. Uploads the video to Google Drive if available and updates the database.
@@ -137,6 +148,7 @@ def handle_single_event(event_data, skip_wait=False):
     has_clip = event_data['has_clip']
 
     start_time = event_data['start_time']
+    recorded_at = format_event_recorded_at(start_time)
 
     if not database.is_event_exists(event_id):
         database.insert_event(event_id, start_time)
@@ -151,16 +163,26 @@ def handle_single_event(event_data, skip_wait=False):
                 if not skip_wait:
                     logging.debug("Waiting 5 seconds for Frigate to finalize the clip...")
                     time.sleep(5)
-                logging.debug(f"Uploading video {event_id} to Google Drive...")
-                success = google_drive.upload_to_google_drive(event_data, FRIGATE_URL)
+                logging.debug(f"Uploading video {event_id} (recorded {recorded_at}) to Google Drive...")
+                try:
+                    success = google_drive.upload_to_google_drive(event_data, FRIGATE_URL)
+                except ClipNotAvailableError as e:
+                    logging.warning(
+                        f"Clip for event {event_id} (recorded {recorded_at}) no longer available on Frigate. "
+                        f"Removing from database. Reason: {e}"
+                    )
+                    database.delete_event(event_id)
+                    return
                 if success:
-                    logging.info(f"Video {event_id} successfully uploaded.")
+                    logging.info(f"Video {event_id} (recorded {recorded_at}) successfully uploaded.")
                     database.update_event(event_id, 1)
                 else:
                     database.update_event(event_id, 0)
                     # to prevent annoying logs / notifications... Notify only after 3 tries
                     if database.select_tries(event_id) >= 3:
-                        logging.error(f"Failed to upload video {event_id}.")
+                        logging.error(
+                            f"Failed to upload video {event_id} (recorded {recorded_at})."
+                        )
             else:
                 logging.debug(f"Event {event_id} already uploaded. Skipping...")
 
@@ -251,6 +273,7 @@ def run_every_x_minutes():
     handle_all_events()
     handle_not_uploaded_events()
     database.cleanup_old_events()
+    database.cleanup_stale_pending_events()
 
 
 def daily_health_report():
