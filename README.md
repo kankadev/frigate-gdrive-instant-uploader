@@ -135,11 +135,14 @@ the uploader.
    ```bash
    docker cp frigate:/usr/local/nginx/conf/proxy.conf /opt/frigate/proxy_custom.conf
    ```
-2. Increase the two timeout lines (e.g. to 900 seconds = 15 minutes):
+2. Increase the two timeout lines (e.g. to **600 seconds = 10 minutes**):
    ```bash
-   sed -i 's/proxy_read_timeout 360;/proxy_read_timeout 900;/' /opt/frigate/proxy_custom.conf
-   sed -i 's/proxy_send_timeout 360;/proxy_send_timeout 900;/' /opt/frigate/proxy_custom.conf
+   sed -i 's/proxy_read_timeout 360;/proxy_read_timeout 600;/' /opt/frigate/proxy_custom.conf
+   sed -i 's/proxy_send_timeout 360;/proxy_send_timeout 600;/' /opt/frigate/proxy_custom.conf
    ```
+   > **Why not higher?** Values above 600 s block the upload queue for too long
+   > when Frigate has a systematic clip-assembly bug (e.g. a corrupt recording segment).
+   > The uploader uses dynamic retry limits: events >3 h get only 3 retries (~30 min total).
 3. Mount the custom file into the Frigate container (read-only) via `docker-compose.yml`:
    ```yaml
    services:
@@ -151,7 +154,7 @@ the uploader.
    ```bash
    docker compose down && docker compose up -d
    ```
-5. Rebuild and restart the uploader so it picks up the new Frigate timeout:
+5. Rebuild and restart the uploader:
    ```bash
    cd ~/frigate-gdrive-instant-uploader
    docker compose down && docker compose up -d --build
@@ -162,6 +165,23 @@ the uploader.
 > after raising Frigate's nginx limit, you can also increase the uploader's
 > `DOWNLOAD_TIMEOUT` in `src/google_drive.py` (default is `(60, 600)` — 60 s connect,
 > 600 s read).
+
+## Broken / corrupt clips on Frigate
+
+If a specific event consistently freezes at the same byte count (e.g. always ~750 MB
+out of 1 GB) across multiple retries, the underlying Frigate recording segment is
+likely corrupt. Frigate re-assembles the clip on every request, so a corrupt source
+segment will never resolve itself.
+
+**Symptoms:**
+- Download progress logs stop at the same MB count every time
+- Frigate nginx shows `upstream timed out` after ~20 minutes
+- The clip plays in Frigate's UI but freezes at the same timestamp
+
+**Workaround:**
+The uploader will give up on such events faster (3 retries for >3 h events, 10 for
+1–3 h) and send a **Mattermost notification** with the direct clip URL so you can
+try a manual download before Frigate's retention expires.
 
 Inspect the local database:
 ```bash
