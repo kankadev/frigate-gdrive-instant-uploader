@@ -207,6 +207,7 @@ def handle_single_event(event_data, skip_wait=False):
 
 
 def handle_all_events():
+    logging.info("=== handle_all_events started ===")
     latest_start_time = database.get_latest_event_start_time()
     logging.debug(f"Fetching all events from Frigate since {latest_start_time}...")
     all_events = fetch_all_events(FRIGATE_URL, after=latest_start_time, batch_size=100)
@@ -216,15 +217,16 @@ def handle_all_events():
         logging.error("Failed to fetch events from Frigate after multiple retries.")
     elif not all_events:
         # This is the normal case where there are no new events
-        logging.debug("No new events to process.")
+        logging.info("No new events to process from Frigate API.")
     else:
         # Process the fetched events
-        logging.debug(f"Received {len(all_events)} events")
+        logging.info(f"Received {len(all_events)} new events from Frigate API.")
         i = 1
         for event in all_events:
             logging.debug(f"Handling event #{i}: {event['id']} in handle_all_events")
             handle_single_event(event)
             i = i + 1
+        logging.info(f"=== handle_all_events completed. Processed {i - 1} new events. ===")
 
 
 # MQTT Reconnect settings
@@ -270,12 +272,14 @@ def mqtt_handler():
 
 
 def handle_not_uploaded_events():
+    logging.info("=== handle_not_uploaded_events started ===")
     event_ids = database.select_not_uploaded_yet()
     if not event_ids:
-        logging.debug("No not uploaded events found to retry")
+        logging.info("No pending events to retry.")
+        logging.info("=== handle_not_uploaded_events completed ===")
         return
 
-    logging.debug(f"Found {len(event_ids)} not uploaded events to retry")
+    logging.info(f"Found {len(event_ids)} pending events to retry (oldest first).")
     consecutive_timeouts = 0
     for event_id in event_ids:
         # Check reachability before every individual event so one slow/busy
@@ -298,14 +302,18 @@ def handle_not_uploaded_events():
         except FrigateUnreachableError:
             logging.warning(f"Frigate became unreachable during retry for event {event_id}. Skipping to next.")
             continue
+    logging.info(f"=== handle_not_uploaded_events completed. Retried {len(event_ids)} events. ===")
 
 
 def run_every_x_minutes():
-    logging.debug("Handling all events and cleaning up old events...")
-    # Clean up first so stale entries are not loaded into the retry queue.
+    logging.info("=== Periodic job started ===")
+    logging.info("Step 1/3: Cleaning up old events from database...")
     database.cleanup_old_events()
-    handle_all_events()
+    logging.info("Step 2/3: Retrying old pending events (oldest first)...")
     handle_not_uploaded_events()
+    logging.info("Step 3/3: Fetching and processing new events from Frigate API...")
+    handle_all_events()
+    logging.info("=== Periodic job completed ===")
 
 
 def daily_health_report():
