@@ -241,7 +241,7 @@ def select_not_uploaded_yet(db_path=DB_PATH):
     try:
         cursor = conn.cursor()
         cursor.execute(
-            'SELECT event_id FROM events WHERE uploaded = 0 and created <= datetime("now", "-5 minutes") and retry = 1')
+            'SELECT event_id FROM events WHERE uploaded = 0 and created <= datetime("now", "-5 minutes") and retry = 1 ORDER BY created ASC')
         result = cursor.fetchall()
         return [row[0] for row in result]
     except Exception as e:
