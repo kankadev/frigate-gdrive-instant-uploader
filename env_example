@@ -14,6 +14,12 @@ GDRIVE_RETENTION_DAYS=0
 # (typically 14 days). Default: 30 days.
 STALE_PENDING_DAYS=30
 
+# Optional: After how many failed upload attempts an event is marked as
+# non-retriable (retry=0). At a 10-minute retry interval, 50 attempts equal
+# about 8 hours of trying. After that the event is no longer touched but stays
+# in the DB until STALE_PENDING_DAYS deletes it. Default: 50.
+MAX_RETRY_ATTEMPTS=50
+
 # MQTT
 MQTT_BROKER_ADDRESS=192.168.0.59
 MQTT_TOPIC=frigate/events
