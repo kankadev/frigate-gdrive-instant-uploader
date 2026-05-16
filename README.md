@@ -4,6 +4,19 @@ Uploads event clips from Frigate to Google Drive **instantly** via MQTT and reli
 uploads via a 10-minute retry scheduler. A SQLite database keeps track of every event so nothing is lost
 during internet outages or container restarts.
 
+> ## ⚠ Breaking changes for existing users
+>
+> The retention configuration was simplified. **Please review your `.env`:**
+>
+> - **New:** `DB_RETENTION_DAYS` (default `30`) – controls retention for **all** events in the local SQLite DB, regardless of upload status.
+> - **Deprecated but still supported:** `EVENT_RETENTION_DAYS` and `STALE_PENDING_DAYS` are picked up as fallbacks. You don't need to change anything immediately, but the recommended action is to replace them with `DB_RETENTION_DAYS`.
+> - **Behavioural change:** previously `uploaded=1` and `uploaded=0` rows had separate retention windows. Now both share the same window. As long as your retention is safely above Frigate's clip retention (typically 14 days) there is **no risk of data loss** – the file in Google Drive is never touched by this cleanup.
+>
+> Other new env vars introduced recently:
+>
+> - `MAX_RETRY_ATTEMPTS` (default `50`) – give up on an event after this many failed upload attempts (~8 h at 10‑minute cadence).
+> - `MATTERMOST_PREFIX` – optional prefix added to all Mattermost messages.
+
 ## Features
 - **Instant upload** via MQTT (`event end` triggers upload within seconds)
 - **Self-healing retry queue:** events that fail to upload stay in the DB and are retried every 10 minutes
@@ -63,14 +76,33 @@ or mosquitto_sub. If so, you should see events from Frigate and can use this scr
 7. run `docker compose up -d` in project root directory
 8. check logs with `docker logs frigate-gdrive-instant-uploader` or see `/logs/app.log`
 
+# Configuration
+
+All configuration is read from `.env` (use `env_example` as template).
+
+| Variable | Default | Description |
+|---|---|---|
+| `TZ` | `Europe/Istanbul` | Container timezone (also affects log timestamps and Daily Report) |
+| `LOGGING_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL` |
+| `FRIGATE_URL` | – | Frigate base URL incl. scheme and port |
+| `MQTT_BROKER_ADDRESS` / `MQTT_PORT` / `MQTT_USER` / `MQTT_PASSWORD` / `MQTT_TOPIC` | – | MQTT broker connection details |
+| `SERVICE_ACCOUNT_FILE` | `credentials/service_account.json` | Google service account JSON |
+| `GOOGLE_ACCOUNT_TO_IMPERSONATE` | – | Drive account the service account impersonates |
+| `UPLOAD_DIR` | `frigate` | Root folder in Drive; videos go to `/UPLOAD_DIR/YYYY/MM/DD/` |
+| `DB_RETENTION_DAYS` | `30` | Delete SQLite rows older than this, regardless of upload status. Drive files unaffected |
+| `MAX_RETRY_ATTEMPTS` | `50` | Give up retrying a single event after this many failed attempts (≈8 h) |
+| `GDRIVE_RETENTION_DAYS` | `0` | Delete physical files in Drive older than this many days (`0` = off) |
+| `MATTERMOST_WEBHOOK_URL` | – | Optional. Enables error alerts and the Daily Health Report |
+| `MATTERMOST_PREFIX` | – | Optional. String prepended to every Mattermost message |
+
 # Scheduled Jobs
 
 | Interval | Job | Purpose |
 |---|---|---|
-| Every 10 min | `run_every_x_minutes` | Fetch missed events from Frigate, retry failed uploads, clean up old uploaded events |
-| Every 6 h | `run_every_6_hours` | Log/notify about failed events (legacy) |
+| Every 10 min | `run_every_x_minutes` | Clean up old DB rows, fetch missed events, retry failed uploads |
+| Every 6 h | `run_every_6_hours` | Log/notify about hard-failed events (legacy) |
 | Daily 09:00 | `daily_health_report` | Mattermost status report (OK / WARNING / CRITICAL) |
-| Daily | `cleanup_old_files_on_drive` | Delete Google Drive files older than `GDRIVE_RETENTION_DAYS` (skipped if 0) |
+| Daily | `cleanup_old_files_on_drive` | Delete Google Drive files older than `GDRIVE_RETENTION_DAYS` (skipped if `0`) |
 
 # Mattermost Health Report
 

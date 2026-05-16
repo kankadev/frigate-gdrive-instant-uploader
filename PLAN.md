@@ -110,7 +110,7 @@ Schritt es jeweils gescheitert ist (Download? Upload? Auth?).
 - [x] Hard-Fail-Cleanup: 404 auf `/api/events/{id}` → Auto-Delete
 - [x] Clip-Cleanup: 404 auf `/clip.mp4` → Auto-Delete
 - [x] Konservativer 400-Umgang: kein Auto-Delete (Datenintegrität)
-- [x] Stale-Pending-Cleanup nach `STALE_PENDING_DAYS` (default 30)
+- [x] Einheitliche Retention via `DB_RETENTION_DAYS` (default 30) – ersetzt `EVENT_RETENTION_DAYS` und `STALE_PENDING_DAYS` mit Fallback-Kompatibilität
 - [x] Aufgeben nach `MAX_RETRY_ATTEMPTS` Versuchen (default 50)
 - [x] Aufnahme-Timestamp in Log-Messages für bessere Lesbarkeit
 - [x] Daily Health Report (grün/orange/rot) via Mattermost
