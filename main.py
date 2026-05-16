@@ -270,26 +270,34 @@ def mqtt_handler():
 
 
 def handle_not_uploaded_events():
-    # Avoid spamming Mattermost when Frigate is completely down (e.g. restarting).
-    if not check_frigate_reachable(FRIGATE_URL):
-        logging.warning("Frigate is unreachable. Skipping retry loop to avoid notification spam.")
+    event_ids = database.select_not_uploaded_yet()
+    if not event_ids:
+        logging.debug("No not uploaded events found to retry")
         return
 
-    event_ids = database.select_not_uploaded_yet()
-    if event_ids:
-        logging.debug(f"Found {len(event_ids)} not uploaded events to retry")
-        for event_id in event_ids:
-            try:
-                event_data = fetch_event(FRIGATE_URL, event_id)
-                handle_single_event(event_data, skip_wait=True)
-            except EventNotFoundError:
-                logging.warning(f"Event {event_id} no longer exists on Frigate. Removing from database.")
-                database.delete_event(event_id)
-            except FrigateUnreachableError:
-                logging.warning(f"Frigate became unreachable during retry for event {event_id}. Aborting retry loop.")
+    logging.debug(f"Found {len(event_ids)} not uploaded events to retry")
+    consecutive_timeouts = 0
+    for event_id in event_ids:
+        # Check reachability before every individual event so one slow/busy
+        # moment on Frigate does not abort the entire retry queue.
+        if not check_frigate_reachable(FRIGATE_URL):
+            consecutive_timeouts += 1
+            if consecutive_timeouts >= 3:
+                logging.warning("Frigate unreachable for 3 consecutive events. Aborting retry loop.")
                 break
-    else:
-        logging.debug("No not uploaded events found to retry")
+            logging.debug(f"Frigate not reachable for event {event_id}, skipping...")
+            continue
+        consecutive_timeouts = 0
+
+        try:
+            event_data = fetch_event(FRIGATE_URL, event_id)
+            handle_single_event(event_data, skip_wait=True)
+        except EventNotFoundError:
+            logging.warning(f"Event {event_id} no longer exists on Frigate. Removing from database.")
+            database.delete_event(event_id)
+        except FrigateUnreachableError:
+            logging.warning(f"Frigate became unreachable during retry for event {event_id}. Skipping to next.")
+            continue
 
 
 def run_every_x_minutes():
