@@ -267,13 +267,20 @@ def download_video_with_retry(video_url, max_retries=5):
                 session.mount("http://", adapter)
                 
                 with session.get(video_url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
-                    # Only HTTP 404 is a definitive "clip is gone" signal from Frigate.
-                    # HTTP 400 is ambiguous (could be transient), so we keep retrying it
-                    # to make absolutely sure no clip is ever lost.
+                    # HTTP 404 is a definitive "clip is gone" signal from Frigate.
+                    # HTTP 400 with "No recordings found" means the recordings were
+                    # pruned by Frigate's retention, but the event metadata still
+                    # exists. This is also permanent — the clip will never come back.
                     if response.status_code == 404:
                         raise ClipNotAvailableError(
                             f"Clip not available on Frigate (HTTP 404) for {video_url}"
                         )
+                    if response.status_code == 400:
+                        body = response.text
+                        if "No recordings found" in body:
+                            raise ClipNotAvailableError(
+                                f"Clip recordings pruned by Frigate (HTTP 400) for {video_url}: {body}"
+                            )
                     response.raise_for_status()
                     
                     with tempfile.TemporaryFile() as fh:
