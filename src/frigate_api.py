@@ -1,6 +1,6 @@
 import logging
 import requests
-from requests.exceptions import ChunkedEncodingError, ConnectionError
+from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 from time import sleep
 
 
@@ -9,10 +9,27 @@ class EventNotFoundError(Exception):
     pass
 
 
+class FrigateUnreachableError(Exception):
+    """Raised when Frigate is unreachable (network/connection issue)."""
+    pass
+
+
 class ClipNotAvailableError(Exception):
     """Raised when the clip file for an event is no longer available on Frigate
     (HTTP 400/404 on the clip URL). The event metadata may still exist."""
     pass
+
+
+def check_frigate_reachable(frigate_url, timeout=5):
+    """
+    Check if Frigate is reachable by hitting the /api/version endpoint.
+    Returns True if reachable, False otherwise.
+    """
+    try:
+        response = requests.get(f'{frigate_url}/api/version', timeout=timeout)
+        return response.status_code == 200
+    except requests.RequestException:
+        return False
 
 
 def generate_video_url(frigate_url, event_id):
@@ -29,13 +46,13 @@ def fetch_event(frigate_url, event_id, retries=2, timeout=30):
             return response.json()
         except EventNotFoundError:
             raise
-        except (ChunkedEncodingError, ConnectionError, requests.HTTPError) as e:
+        except (ChunkedEncodingError, ConnectionError, Timeout, requests.HTTPError) as e:
             logging.error(f"Attempt {attempt + 1} failed with error: {e}")
             if attempt < retries - 1:
                 sleep(2)
             else:
                 logging.error(f"All retries failed for fetching event {event_id}: {e}")
-                raise
+                raise FrigateUnreachableError(f"Frigate unreachable: {e}")
 
 
 def fetch_all_events(frigate_url, after=None, batch_size=100, retries=2, timeout=30):

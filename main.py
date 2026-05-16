@@ -71,7 +71,7 @@ import paho.mqtt.client as mqtt
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from src import database, google_drive
-from src.frigate_api import fetch_all_events, fetch_event, EventNotFoundError, ClipNotAvailableError
+from src.frigate_api import fetch_all_events, fetch_event, check_frigate_reachable, EventNotFoundError, ClipNotAvailableError, FrigateUnreachableError
 from src.google_drive import cleanup_old_files_on_drive, service
 from src.mattermost_handler import MattermostHandler, send_mattermost_notification
 
@@ -270,6 +270,11 @@ def mqtt_handler():
 
 
 def handle_not_uploaded_events():
+    # Avoid spamming Mattermost when Frigate is completely down (e.g. restarting).
+    if not check_frigate_reachable(FRIGATE_URL):
+        logging.warning("Frigate is unreachable. Skipping retry loop to avoid notification spam.")
+        return
+
     event_ids = database.select_not_uploaded_yet()
     if event_ids:
         logging.debug(f"Found {len(event_ids)} not uploaded events to retry")
@@ -280,9 +285,9 @@ def handle_not_uploaded_events():
             except EventNotFoundError:
                 logging.warning(f"Event {event_id} no longer exists on Frigate. Removing from database.")
                 database.delete_event(event_id)
-            except Exception as e:
-                logging.error(f"Failed to fetch event {event_id} from Frigate for retry: {e}")
-                database.update_event(event_id, 0)
+            except FrigateUnreachableError:
+                logging.warning(f"Frigate became unreachable during retry for event {event_id}. Aborting retry loop.")
+                break
     else:
         logging.debug("No not uploaded events found to retry")
 

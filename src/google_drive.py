@@ -10,6 +10,7 @@ import requests
 from dotenv import load_dotenv
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+from time import sleep
 from datetime import datetime, timedelta
 import pytz
 from google.oauth2 import service_account
@@ -316,6 +317,10 @@ def upload_to_google_drive(event, frigate_url):
     video_url = generate_video_url(frigate_url, event_id)
 
     with upload_lock:
+        # Another thread may have uploaded this event while we were waiting for the lock.
+        if database.select_event_uploaded(event_id) == 1:
+            logging.info(f"Event {event_id} was already uploaded by another thread. Skipping.")
+            return True
         for attempt in range(MAX_RETRIES + 1):
             try:
                 # 1. Ensure folder structure exists
