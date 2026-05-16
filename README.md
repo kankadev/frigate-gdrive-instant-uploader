@@ -121,6 +121,48 @@ docker exec -it frigate-gdrive-instant-uploader python -c "from main import dail
 
 # Troubleshooting
 
+## Large event uploads fail with `ChunkedEncodingError` or `Read timed out`
+
+Frigate assembles clip MP4s on-the-fly when you request `/api/events/<id>/clip.mp4`.
+For events longer than a few hours this can take several minutes. By default Frigate's
+internal nginx proxy kills the stream after **360 seconds** (`proxy_read_timeout 360`),
+causing a `ChunkedEncodingError: Response ended prematurely` or `Read timed out` in
+the uploader.
+
+**Fix:** increase the proxy timeout on the Frigate side.
+
+1. Copy the default proxy config out of the running Frigate container:
+   ```bash
+   docker cp frigate:/usr/local/nginx/conf/proxy.conf /opt/frigate/proxy_custom.conf
+   ```
+2. Increase the two timeout lines (e.g. to 900 seconds = 15 minutes):
+   ```bash
+   sed -i 's/proxy_read_timeout 360;/proxy_read_timeout 900;/' /opt/frigate/proxy_custom.conf
+   sed -i 's/proxy_send_timeout 360;/proxy_send_timeout 900;/' /opt/frigate/proxy_custom.conf
+   ```
+3. Mount the custom file into the Frigate container (read-only) via `docker-compose.yml`:
+   ```yaml
+   services:
+     frigate:
+       volumes:
+         - /opt/frigate/proxy_custom.conf:/usr/local/nginx/conf/proxy.conf:ro
+   ```
+4. Restart Frigate:
+   ```bash
+   docker compose down && docker compose up -d
+   ```
+5. Rebuild and restart the uploader so it picks up the new Frigate timeout:
+   ```bash
+   cd ~/frigate-gdrive-instant-uploader
+   docker compose down && docker compose up -d --build
+   ```
+
+> **Note:** the uploader itself also uses a streaming-friendly tuple timeout
+> `(connect_timeout, read_timeout)` for the HTTP client. If you still see timeouts
+> after raising Frigate's nginx limit, you can also increase the uploader's
+> `DOWNLOAD_TIMEOUT` in `src/google_drive.py` (default is `(60, 600)` — 60 s connect,
+> 600 s read).
+
 Inspect the local database:
 ```bash
 docker exec -it frigate-gdrive-instant-uploader sqlite3 /app/db/events.db
