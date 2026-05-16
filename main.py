@@ -184,10 +184,11 @@ def handle_single_event(event_data, skip_wait=False):
                         f"Failed to upload video {event_id} (recorded {recorded_at}). "
                         f"Attempt {tries}/{MAX_RETRY_ATTEMPTS}."
                     )
-                    # Notification policy to avoid spamming Mattermost:
-                    # - tries 1-3: ERROR (Mattermost gets notified - early warning)
-                    # - tries 4..MAX_RETRY_ATTEMPTS-1: WARNING (file log only, no Mattermost)
-                    # - tries == MAX_RETRY_ATTEMPTS: ERROR (final give-up notification)
+                    # Notification policy: send AT MOST two Mattermost messages per event.
+                    # - tries < 80% of MAX_RETRY_ATTEMPTS: WARNING (file log only)
+                    # - tries == 80% threshold: single ERROR (early heads-up)
+                    # - tries == MAX_RETRY_ATTEMPTS: single ERROR (final give-up)
+                    warning_threshold = max(1, int(MAX_RETRY_ATTEMPTS * 0.8))
                     if tries >= MAX_RETRY_ATTEMPTS:
                         logging.error(
                             f"Giving up on event {event_id} (recorded {recorded_at}) "
@@ -195,8 +196,10 @@ def handle_single_event(event_data, skip_wait=False):
                             f"No further upload attempts will be made for this event."
                         )
                         database.update_event_retry(event_id, 0)
-                    elif tries >= 3 and tries <= 5:
-                        logging.error(msg)
+                    elif tries == warning_threshold:
+                        logging.error(
+                            f"{msg} Heads-up: will give up at {MAX_RETRY_ATTEMPTS} attempts."
+                        )
                     else:
                         logging.warning(msg)
             else:
