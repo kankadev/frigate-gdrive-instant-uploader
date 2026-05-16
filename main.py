@@ -285,7 +285,7 @@ MAX_RECONNECT_COUNT = 12
 MAX_RECONNECT_DELAY = 60
 
 
-def on_disconnect(client, userdata, rc):
+def on_disconnect(client, userdata, disconnect_flags, rc, properties):
     logging.info("MQTT disconnected with result code: %s", rc)
     reconnect_count, reconnect_delay = 0, FIRST_RECONNECT_DELAY
     while reconnect_count < MAX_RECONNECT_COUNT:
