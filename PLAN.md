@@ -24,35 +24,7 @@ Durchsatz bei Backlogs.
 
 ---
 
-## 2. Maximale Clip-Größe überspringen (`MAX_CLIP_SIZE`)
-
-**Status:** offen
-**Priorität:** mittel
-
-Einige Clips werden riesig (z.B. 10 GB bei 14h-Events). Auch wenn Frigate sie
-korrekt assembliert, dauert der Upload ewig und blockiert die Queue. Wenn der
-User sowieso keine 10-GB-Videos in Google Drive will, sollten wir sie direkt
-ablehnen.
-
-**Vorschlag:** Env-Variable `MAX_CLIP_SIZE` mit human-readable Parser:
-- `MAX_CLIP_SIZE=5GB` → überspringe Clips > 5 GB
-- `MAX_CLIP_SIZE=500MB` → überspringe Clips > 500 MB
-- `MAX_CLIP_SIZE=0` oder leer → keine Begrenzung (Default)
-
-**Implementierung:**
-1. Vor Download: `HEAD` Request auf Clip-URL oder `Content-Length` aus erstem
-   `GET`-Chunk lesen.
-2. Wenn bekannt und > Limit → sofort `retry=0` mit Log:
-   `Skipping X GB clip for {event_id}, exceeds MAX_CLIP_SIZE=5GB`
-3. Wenn unbekannt (Streaming) → während Download prüfen und abbrechen.
-
-**Aufwand:** klein.
-**Nutzen:** 10-GB-Monster-Events werden in 1 Sekunde abgelehnt statt
-10 Minuten heruntergeladen zu werden.
-
----
-
-## 3. `fetch_all_events` als Generator (Streaming)
+## 2. `fetch_all_events` als Generator (Streaming)
 
 **Status:** offen
 **Priorität:** niedrig
@@ -70,7 +42,7 @@ und der Memory-Footprint konstant bleibt.
 
 ---
 
-## 4. MQTT `on_message` in separaten Thread auslagern
+## 3. MQTT `on_message` in separaten Thread auslagern
 
 **Status:** offen
 **Priorität:** hoch
@@ -98,7 +70,7 @@ threading.Thread(
 Das lässt `on_message` sofort zurückkehren. Der MQTT-Loop kann weiter pingen
 und neue Events empfangen.
 
-**Abhängigkeit:** Punkt 5 (Threading / Parallel-Uploads) — die gleichen
+**Abhängigkeit:** Punkt 4 (Threading / Parallel-Uploads) — die gleichen
 SQLite-Concurrency-Probleme gelten hier. WAL-Mode hilft, aber Connection-Sharing
 zwischen Threads kann trotzdem zu `database is locked` führen.
 
@@ -108,7 +80,7 @@ verspätet.
 
 ---
 
-## 5. Threading / Parallel-Uploads (mit SQLite-Warnung)
+## 4. Threading / Parallel-Uploads (mit SQLite-Warnung)
 
 **Status:** offen
 **Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
@@ -157,7 +129,8 @@ Voraussetzungen erfüllt sein:
 - [x] **Mattermost-Benachrichtigung bei Aufgabe:** Event-Details, Kamera, Label, direkte Clip/Snapshot-URLs
 - [x] **Download-Progress-Logging:** INFO-Level alle 50MB für Diagnose von Freeze-Punkten
 - [x] **ChunkedEncodingError-Diagnose:** README-Doku für "korrupte Frigate-Segmente" hinzugefügt
-- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 4 oben)
+- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 3 oben)
+- [x] **`MAX_CLIP_SIZE` mit Pre-flight HEAD-Check und Streaming-Abort:** Env-Variable `MAX_CLIP_SIZE` (human-readable: `5GB`, `500MB`, `0`/leer = off). `_parse_max_clip_size()` mit Regex. Vor Download: HEAD-Request auf die Clip-URL, bei `Content-Length > Limit` sofort `ClipTooLargeError`. Falls HEAD nicht unterstützt: während des Streamings zählen und bei Überschreitung abbrechen. Event wird via `update_event_retry(0, last_error_kind=ERR_CLIP_TOO_LARGE)` als non-retriable markiert, Metadaten bleiben in der DB erhalten.
 - [x] **Strukturierte Fehlerstatistiken in der DB:** Neue Spalte `last_error_kind` (Migration 4) mit coarse-grained Kategorien (`frigate_download_timeout`, `frigate_download_5xx`, `frigate_download_truncated`, `frigate_download_empty`, `clip_too_large`, `drive_5xx`, `drive_http`, `drive_network`, `drive_other`). `upload_to_google_drive()` und `download_video_with_retry()` liefern jetzt `(result, error_kind)`-Tuples. `database.update_event()` / `update_event_retry()` akzeptieren `last_error_kind`. Bei Erfolg wird die Spalte auf NULL zurückgesetzt. Daily Health Report zeigt Aufschlüsselung der wartenden Events nach Fehler-Kategorie.
 - [x] **Edge-triggered Mattermost-Notifications bei Frigate-Outage:** State-Variable `_frigate_unreachable_since` + idempotente Helper `_notify_frigate_unreachable_once()` / `_notify_frigate_recovered_once()`. Maximal 2 Notifications pro Outage-Zyklus (Down + Recovery mit Downtime-Dauer), kein Spam bei längeren Ausfällen. Bewusst nicht für Internet-Outage (kein Webhook erreichbar). Container-Restart während Outage führt maximal zu 1 Duplikat-Notification.
 - [x] **Frigate-Reachability-Pre-Check pro Job-Lauf:** `handle_not_uploaded_events()` und `handle_all_events()` prüfen am Job-Anfang per `check_frigate_reachable()`, ob Frigate erreichbar ist. Default-Timeout der Funktion von 120s auf 10s reduziert (`/api/version` antwortet in Millisekunden, langer Timeout war historisch falsch). Bei Frigate-Outage wird der gesamte Job in 10s übersprungen statt bis zu 6 min Reachability-Timeouts zu durchlaufen. Der bestehende Per-Event-Check im Retry-Loop bleibt als Race-Schutz erhalten und profitiert ebenfalls vom kürzeren Timeout.
