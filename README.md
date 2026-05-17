@@ -209,19 +209,28 @@ docker exec -it frigate-gdrive-instant-uploader sqlite3 /app/db/events.db
 
 Useful queries:
 ```sql
--- Overall status (uploaded × retry)
-SELECT uploaded, retry, COUNT(*) FROM events GROUP BY uploaded, retry;
+-- Total pending in queue
+SELECT COUNT(*) AS pending_total FROM events WHERE uploaded = 0 AND retry = 1;
 
--- Pending events grouped by age
+-- Pending events per recorded day
 SELECT
-  CASE
-    WHEN created < datetime('now', '-30 days') THEN '> 30 days'
-    WHEN created < datetime('now', '-14 days') THEN '14-30 days'
-    WHEN created < datetime('now', '-7 days')  THEN '7-14 days'
-    ELSE '< 7 days'
-  END AS bucket,
-  COUNT(*) AS amount
-FROM events WHERE uploaded = 0 GROUP BY bucket;
+  date(datetime(start_time, 'unixepoch', 'localtime')) AS recorded_day,
+  COUNT(*) AS pending_count
+FROM events
+WHERE uploaded = 0 AND retry = 1
+GROUP BY recorded_day
+ORDER BY recorded_day DESC;
+
+-- Daily overview: uploaded vs pending vs given up
+SELECT
+  date(datetime(start_time, 'unixepoch', 'localtime')) AS recorded_day,
+  SUM(CASE WHEN uploaded = 1 THEN 1 ELSE 0 END) AS uploaded,
+  SUM(CASE WHEN uploaded = 0 AND retry = 1 THEN 1 ELSE 0 END) AS pending,
+  SUM(CASE WHEN uploaded = 0 AND retry = 0 THEN 1 ELSE 0 END) AS given_up,
+  COUNT(*) AS total
+FROM events
+GROUP BY recorded_day
+ORDER BY recorded_day DESC;
 
 -- Oldest pending events
 SELECT event_id, tries, datetime(start_time,'unixepoch','localtime') AS recorded, created
