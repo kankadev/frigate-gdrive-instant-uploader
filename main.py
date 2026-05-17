@@ -94,6 +94,36 @@ MATTERMOST_WEBHOOK_URL = os.getenv('MATTERMOST_WEBHOOK_URL')
 HEALTH_REPORT_TIME = os.getenv('HEALTH_REPORT_TIME', '09:00')
 
 
+def _parse_skip_events_longer_than(value):
+    """
+    Parse SKIP_EVENTS_LONGER_THAN_SECONDS env var. Returns the threshold in
+    seconds, or 0 if the limit is disabled (empty / '0' / invalid).
+    """
+    if not value:
+        return 0
+    try:
+        seconds = int(value)
+        if seconds < 0:
+            raise ValueError("must be >= 0")
+        return seconds
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            f"Invalid SKIP_EVENTS_LONGER_THAN_SECONDS='{value}' ({e}). "
+            f"Disabling the duration filter."
+        )
+        return 0
+
+
+SKIP_EVENTS_LONGER_THAN_SECONDS = _parse_skip_events_longer_than(
+    os.getenv('SKIP_EVENTS_LONGER_THAN_SECONDS')
+)
+if SKIP_EVENTS_LONGER_THAN_SECONDS > 0:
+    logger.info(
+        f"SKIP_EVENTS_LONGER_THAN_SECONDS configured: events longer than "
+        f"{SKIP_EVENTS_LONGER_THAN_SECONDS}s will be marked non-retriable."
+    )
+
+
 def parse_bool_env(value, default=False):
     """
     Parses a boolean env var. Accepts the usual suspects (case-insensitive):
@@ -219,6 +249,31 @@ def handle_single_event(event_data, skip_wait=False, online=None):
 
     if not database.is_event_exists(event_id):
         database.insert_event(event_id, start_time)
+
+    # Duration filter: skip events that exceed SKIP_EVENTS_LONGER_THAN_SECONDS.
+    # Checked here so it applies on both the MQTT path and the retry-loop path,
+    # and before any clip-roundtrip to Frigate (the `/clip.mp4` endpoint can
+    # hang for minutes assembling long clips — exactly the case we want to skip).
+    if (
+        SKIP_EVENTS_LONGER_THAN_SECONDS > 0
+        and end_time is not None
+        and (end_time - start_time) > SKIP_EVENTS_LONGER_THAN_SECONDS
+    ):
+        if database.select_retry(event_id) != 0:
+            duration_sec_actual = int(end_time - start_time)
+            logging.warning(
+                f"Skipping event {event_id} (recorded {recorded_at}): duration "
+                f"{duration_sec_actual}s exceeds SKIP_EVENTS_LONGER_THAN_SECONDS="
+                f"{SKIP_EVENTS_LONGER_THAN_SECONDS}s. Marking as non-retriable."
+            )
+            database.update_event_retry(
+                event_id, 0, last_error_kind=google_drive.ERR_EVENT_TOO_LONG
+            )
+        else:
+            logging.debug(
+                f"Event {event_id} already marked non-retriable (duration filter). Skipping."
+            )
+        return True
 
     if online is None:
         online = internet()
