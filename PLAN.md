@@ -3,28 +3,7 @@
 Sammlung von Verbesserungen, die das Tool stabiler, schneller oder
 ressourcen-schonender machen würden. Reihenfolge nach geschätztem Nutzen.
 
-## 1. Cache für `internet()`-Check
-
-**Status:** offen
-**Priorität:** niedrig
-
-`internet()` (in `main.py`) macht für **jedes** Event einen DNS-Lookup auf
-`8.8.8.8:53`. Beim 10-Min-Job mit z.B. 400 Backlog-Events sind das 400
-zusätzliche Netzwerk-Calls.
-
-**Vorschlag:**
-- Ergebnis 30 Sekunden cachen (in-memory, mit Timestamp).
-- Oder: einmal pro Job-Lauf prüfen und Ergebnis in `handle_not_uploaded_events`
-  durchreichen.
-
-**Aufwand:** klein.
-
-**Nutzen:** weniger Netzwerkrauschen, leicht schnellerer Retry-Durchlauf,
-robuster falls Internet-Check selbst kurz hängt.
-
----
-
-## 2. Konfigurierbare Uhrzeit für Daily Health Report
+## 1. Konfigurierbare Uhrzeit für Daily Health Report
 
 **Status:** offen
 **Priorität:** niedrig
@@ -37,7 +16,7 @@ geparst zu `hour`/`minute`.
 
 ---
 
-## 3. Optionale "Alles OK"-Stille-Modus
+## 2. Optionale "Alles OK"-Stille-Modus
 
 **Status:** offen
 **Priorität:** niedrig
@@ -51,7 +30,7 @@ nicht an Mattermost geschickt.
 
 ---
 
-## 4. Frigate-Reachability-Check vor dem Retry-Job
+## 3. Frigate-Reachability-Check vor dem Retry-Job
 
 **Status:** offen
 **Priorität:** mittel
@@ -68,7 +47,7 @@ mit `WARNING`-Log statt 400× Fehler.
 
 ---
 
-## 5. Strukturierte Fehlerstatistiken in der DB
+## 4. Strukturierte Fehlerstatistiken in der DB
 
 **Status:** offen
 **Priorität:** niedrig
@@ -83,7 +62,7 @@ Schritt es jeweils gescheitert ist (Download? Upload? Auth?).
 
 ---
 
-## 6. Maximale Event-Dauer für Uploads
+## 5. Maximale Event-Dauer für Uploads
 
 **Status:** offen
 **Priorität:** mittel
@@ -104,7 +83,7 @@ Durchsatz bei Backlogs.
 
 ---
 
-## 7. Maximale Clip-Größe überspringen (`MAX_CLIP_SIZE`)
+## 6. Maximale Clip-Größe überspringen (`MAX_CLIP_SIZE`)
 
 **Status:** offen
 **Priorität:** mittel
@@ -132,7 +111,7 @@ ablehnen.
 
 ---
 
-## 8. `fetch_all_events` als Generator (Streaming)
+## 7. `fetch_all_events` als Generator (Streaming)
 
 **Status:** offen
 **Priorität:** niedrig
@@ -150,7 +129,7 @@ und der Memory-Footprint konstant bleibt.
 
 ---
 
-## 9. MQTT `on_message` in separaten Thread auslagern
+## 8. MQTT `on_message` in separaten Thread auslagern
 
 **Status:** offen
 **Priorität:** hoch
@@ -178,7 +157,7 @@ threading.Thread(
 Das lässt `on_message` sofort zurückkehren. Der MQTT-Loop kann weiter pingen
 und neue Events empfangen.
 
-**Abhängigkeit:** Punkt 10 (Threading / Parallel-Uploads) — die gleichen
+**Abhängigkeit:** Punkt 9 (Threading / Parallel-Uploads) — die gleichen
 SQLite-Concurrency-Probleme gelten hier. WAL-Mode hilft, aber Connection-Sharing
 zwischen Threads kann trotzdem zu `database is locked` führen.
 
@@ -188,7 +167,7 @@ verspätet.
 
 ---
 
-## 10. Threading / Parallel-Uploads (mit SQLite-Warnung)
+## 9. Threading / Parallel-Uploads (mit SQLite-Warnung)
 
 **Status:** offen
 **Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
@@ -237,6 +216,7 @@ Voraussetzungen erfüllt sein:
 - [x] **Mattermost-Benachrichtigung bei Aufgabe:** Event-Details, Kamera, Label, direkte Clip/Snapshot-URLs
 - [x] **Download-Progress-Logging:** INFO-Level alle 50MB für Diagnose von Freeze-Punkten
 - [x] **ChunkedEncodingError-Diagnose:** README-Doku für "korrupte Frigate-Segmente" hinzugefügt
-- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 9 oben)
+- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 8 oben)
+- [x] **Internet-Check 1× pro Job-Lauf statt pro Event:** `handle_not_uploaded_events()` und `handle_all_events()` rufen `internet()` einmal am Job-Anfang. `handle_single_event` akzeptiert `online`-Parameter (tri-state) und liefert `bool` zurück. Bei einem Upload-Fehler im Loop wird `internet()` neu geprüft und der Loop sauber abgebrochen, falls Konnektivität mittendrin verloren geht. Spart bei Internet-Outage bis zu 20 min an DNS-Timeouts pro 400-Event-Backlog.
 - [x] **Partial Indexes für Retry-Queue:** `idx_pending_retry` und `idx_pending_hard` (Migration 3) — `select_not_uploaded_yet[_hard]()` ohne Full-Table-Scan, ORDER BY `created` direkt aus dem Index
 - [x] **Download-Logs mit event_id:** Alle Progress/Complete/Abort-Messages enthalten jetzt die Event-ID für bessere Traceability bei parallelen Downloads
