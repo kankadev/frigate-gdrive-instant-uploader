@@ -396,7 +396,7 @@ def upload_to_google_drive(event, frigate_url):
                 while response is None:
                     status, response = request.next_chunk()
                     if status:
-                        logging.debug(f"Upload progress: {int(status.progress() * 100)}%")
+                        logging.info(f"Upload progress for {event_id}: {int(status.progress() * 100)}%")
 
                 if 'id' in response:
                     logging.info(f"Video {filename} successfully uploaded to Google Drive with ID: {response['id']}.")
