@@ -25,10 +25,16 @@ class ClipTooLargeError(Exception):
     pass
 
 
-def check_frigate_reachable(frigate_url, timeout=120):
+def check_frigate_reachable(frigate_url, timeout=10):
     """
     Check if Frigate is reachable by hitting the /api/version endpoint.
     Returns True if reachable, False otherwise.
+
+    Default timeout is intentionally short (10 s): `/api/version` is a
+    lightweight endpoint that responds in milliseconds when Frigate is alive.
+    A long timeout here would only slow down the fail-fast path when the host
+    is actually unreachable. The heavier `fetch_event` / `fetch_all_events`
+    calls keep their own longer timeouts.
     """
     try:
         response = requests.get(f'{frigate_url}/api/version', timeout=timeout)

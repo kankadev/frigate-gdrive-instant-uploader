@@ -330,6 +330,14 @@ def handle_all_events():
         logging.info("=== handle_all_events completed (skipped, offline) ===")
         return
 
+    # One Frigate reachability check at job start. fetch_all_events would
+    # eventually return None on its own, but only after several long retries.
+    # Skipping early keeps logs clean and the job slot free.
+    if not check_frigate_reachable(FRIGATE_URL):
+        logging.warning("Frigate not reachable at handle_all_events start. Skipping job.")
+        logging.info("=== handle_all_events completed (skipped, Frigate unreachable) ===")
+        return
+
     latest_start_time = database.get_latest_event_start_time()
     logging.debug(f"Fetching all events from Frigate since {latest_start_time}...")
     all_events = fetch_all_events(FRIGATE_URL, after=latest_start_time, batch_size=100)
@@ -408,6 +416,14 @@ def handle_not_uploaded_events():
     if not internet():
         logging.warning("No internet connectivity at handle_not_uploaded_events start. Skipping retry loop.")
         logging.info("=== handle_not_uploaded_events completed (skipped, offline) ===")
+        return
+
+    # One Frigate reachability check at job start. Fails fast (10s) if the
+    # Frigate host is down (LXC restart, network outage, ...). The per-event
+    # check inside the loop still protects against transient busy moments.
+    if not check_frigate_reachable(FRIGATE_URL):
+        logging.warning("Frigate not reachable at handle_not_uploaded_events start. Skipping retry loop.")
+        logging.info("=== handle_not_uploaded_events completed (skipped, Frigate unreachable) ===")
         return
 
     event_ids = database.select_not_uploaded_yet()
