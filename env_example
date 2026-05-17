@@ -70,3 +70,22 @@ HEALTH_REPORT_TIME=09:00
 # there is a WARNING or CRITICAL condition. OK-reports are silently logged
 # instead. Default: false (always post). Accepts true/false, yes/no, 1/0, on/off.
 HEALTH_REPORT_ONLY_ON_ISSUES=false
+
+# --- Healthcheck HTTP server ------------------------------------------------
+# Lightweight in-process HTTP server that exposes /health (liveness) and
+# /status (detailed JSON stats). The Docker HEALTHCHECK directive probes
+# /health on 127.0.0.1 from inside the container, so external port exposure
+# is OPTIONAL — only needed if you want to query from another host (e.g.
+# Uptime Kuma, Grafana, your own monitoring).
+#
+# Bind interface for the healthcheck server. Default `0.0.0.0` so the
+# Docker HEALTHCHECK probe and (optionally) external monitoring can reach
+# it. Set to `127.0.0.1` to restrict to the container's loopback.
+HEALTHCHECK_BIND=0.0.0.0
+# Port the healthcheck server listens on (1-65535). Default 8080.
+HEALTHCHECK_PORT=8080
+# Optional bearer token guarding /status (the more verbose endpoint).
+# /health remains unauthenticated because Docker's HEALTHCHECK directive
+# cannot send auth headers. Leave empty to disable auth on /status.
+# Example: HEALTHCHECK_TOKEN=$(openssl rand -hex 32)
+HEALTHCHECK_TOKEN=

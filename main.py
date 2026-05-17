@@ -73,6 +73,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from src import database, google_drive
 from src.frigate_api import fetch_all_events, fetch_event, check_frigate_reachable, EventNotFoundError, ClipNotAvailableError, ClipTooLargeError, FrigateUnreachableError
 from src.google_drive import cleanup_old_files_on_drive, service
+from src.healthcheck import HealthState, start_healthcheck_server
 from src.mattermost_handler import MattermostHandler, send_mattermost_notification
 
 # Lade Umgebungsvariablen
@@ -92,6 +93,26 @@ MQTT_USER = os.getenv('MQTT_USER')
 MQTT_PASSWORD = os.getenv('MQTT_PASSWORD')
 MATTERMOST_WEBHOOK_URL = os.getenv('MATTERMOST_WEBHOOK_URL')
 HEALTH_REPORT_TIME = os.getenv('HEALTH_REPORT_TIME', '09:00')
+HEALTHCHECK_BIND = os.getenv('HEALTHCHECK_BIND', '0.0.0.0')
+HEALTHCHECK_PORT_RAW = os.getenv('HEALTHCHECK_PORT', '8080')
+HEALTHCHECK_TOKEN = os.getenv('HEALTHCHECK_TOKEN', '').strip()
+
+
+def _parse_healthcheck_port(value, default=8080):
+    """Parse HEALTHCHECK_PORT, falling back to the default on bogus input."""
+    try:
+        port = int(value)
+        if 1 <= port <= 65535:
+            return port
+        raise ValueError("port out of range")
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            f"Invalid HEALTHCHECK_PORT='{value}' ({e}). Falling back to {default}."
+        )
+        return default
+
+
+HEALTHCHECK_PORT = _parse_healthcheck_port(HEALTHCHECK_PORT_RAW)
 
 
 def _parse_skip_events_longer_than(value):
@@ -509,12 +530,30 @@ def init_db_and_run_migrations():
     database.run_migrations()
 
 
+# Module-level reference to the MQTT client so the healthcheck endpoint can
+# query its connection state without importing mqtt internals or relying on
+# global singletons. Populated by `mqtt_handler()` once the client is built.
+_mqtt_client = None
+
+
+def _mqtt_is_connected():
+    """Return True if the MQTT client exists and reports itself as connected."""
+    if _mqtt_client is None:
+        return False
+    try:
+        return bool(_mqtt_client.is_connected())
+    except Exception:
+        return False
+
+
 def mqtt_handler():
+    global _mqtt_client
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
     client.on_connect = on_connect
     client.on_message = on_message
     client.on_disconnect = on_disconnect
+    _mqtt_client = client
     client.connect(MQTT_BROKER_ADDRESS, MQTT_PORT, 180)  # 180s keepalive → disconnect detected in ~270s
     client.loop_forever()
 
@@ -742,10 +781,41 @@ def main():
         f"Daily health report scheduled at {health_hour:02d}:{health_minute:02d}."
     )
 
+    # Start the HTTP healthcheck server. Runs in its own daemon thread so it
+    # never blocks the main loop. The server is intentionally started AFTER
+    # the scheduler/MQTT subsystems so the very first /health probe sees a
+    # reasonably initialised process. Failure to bind (port in use, perms)
+    # is logged but does not crash the app — the rest of the service is
+    # functional without the healthcheck endpoint.
+    health_state = HealthState(
+        db_path=database.DB_PATH,
+        scheduler=scheduler,
+        mqtt_is_connected=_mqtt_is_connected,
+        status_token=HEALTHCHECK_TOKEN or None,
+    )
+    health_server = None
+    try:
+        health_server, _ = start_healthcheck_server(
+            state=health_state,
+            host=HEALTHCHECK_BIND,
+            port=HEALTHCHECK_PORT,
+        )
+    except OSError as e:
+        logging.error(
+            f"Failed to start healthcheck server on {HEALTHCHECK_BIND}:{HEALTHCHECK_PORT}: {e}. "
+            f"Continuing without healthcheck endpoint."
+        )
+
     try:
         while True:
             time.sleep(1)
     except (KeyboardInterrupt, SystemExit):
+        # Flag that we're shutting down so any in-flight healthcheck probes
+        # immediately report 503 instead of bouncing the orchestrator into
+        # a restart loop while we drain.
+        health_state.shutting_down.set()
+        if health_server:
+            health_server.shutdown()
         scheduler.shutdown()
 
 
