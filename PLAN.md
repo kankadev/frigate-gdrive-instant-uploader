@@ -66,39 +66,7 @@ schlagen fehl bis Neustart".
 
 ---
 
-## 3. Konfigurations-Validierung beim Start
-
-**Status:** offen
-**Priorität:** mittel
-
-Aktuell crasht das Tool bei fehlenden Pflicht-Variablen erst zur Laufzeit
-mit kryptischen Errors deep im Request-Stack. Beispiele:
-
-- `FRIGATE_URL=None` → erst sichtbar beim ersten `requests.get(None+'/api/...')`.
-- `MQTT_BROKER_ADDRESS=None` → `client.connect(None, 1883)` hängt mit
-  unklarer Error-Message.
-- `SERVICE_ACCOUNT_FILE` zeigt auf nicht existierende Datei → schon abgefangen,
-  aber inkonsistent zu den anderen.
-
-**Vorschlag:** Zentrale `validate_config()`-Funktion am Anfang von `main()`,
-die alle Pflicht-Variablen prüft, klare Fehlermeldungen mit Lösungshinweis
-ausgibt und sofort beendet, wenn fundamentale Configs fehlen. Beispiel:
-
-```
-CONFIG ERROR: FRIGATE_URL is not set.
-Please add FRIGATE_URL=http://your-frigate-host:5000 to your .env file.
-```
-
-Plus: einmal beim Start alle aktiven Konfigurationswerte loggen (mit
-maskierten Secrets), damit man sofort sieht, was geladen wurde.
-
-**Aufwand:** klein (~50 LOC).
-**Nutzen:** Mittel — verkürzt "warum funktioniert mein neues Setup nicht?"-
-Debugging massiv. Spart langfristig viele Stunden Frustration.
-
----
-
-## 4. Daily Health Report mit Retry bei Mattermost-Failure
+## 3. Daily Health Report mit Retry bei Mattermost-Failure
 
 **Status:** offen
 **Priorität:** mittel
@@ -123,7 +91,7 @@ silently versagt, weißt du nicht, dass du nichts weißt.
 
 ---
 
-## 5. Graceful Shutdown bei SIGTERM/SIGINT
+## 4. Graceful Shutdown bei SIGTERM/SIGINT
 
 **Status:** offen
 **Priorität:** mittel
@@ -154,7 +122,7 @@ Verhindert Orphan-Uploads und inkonsistente DB-States.
 
 ---
 
-## 6. Tests für Parser, DB-Layer und Helpers
+## 5. Tests für Parser, DB-Layer und Helpers
 
 **Status:** offen
 **Priorität:** mittel (langfristig hoch)
@@ -192,7 +160,7 @@ zukünftigen Änderung. Macht Refactoring entspannter.
 
 ---
 
-## 7. Drive-Service Lazy-Init mit Auto-Reauth
+## 6. Drive-Service Lazy-Init mit Auto-Reauth
 
 **Status:** offen
 **Priorität:** niedrig–mittel
@@ -218,18 +186,18 @@ zukünftigen Änderung. Macht Refactoring entspannter.
 
 **WICHTIG / Risiko:** Berührt jeden Aufruf von `service.files().*` (mehrere
 Dutzend Stellen). Folder-Cache, Cleanup-Job, Upload — alles muss umgestellt
-werden. Hohes Regressions-Risiko ohne Tests (siehe Punkt 7).
+werden. Hohes Regressions-Risiko ohne Tests (siehe Punkt 5).
 
 **Aufwand:** mittel-hoch.
 **Nutzen:** Hoch — verhindert die häufigste "Warum läuft das nicht?"-
 Ursache, die im Langzeitbetrieb auftritt.
 
-**Empfehlung:** Erst nach Punkt 6 (Tests) angehen, damit man Regressionen
+**Empfehlung:** Erst nach Punkt 5 (Tests) angehen, damit man Regressionen
 bemerkt.
 
 ---
 
-## 8. Memory-Streaming statt Bytes-Buffer
+## 7. Memory-Streaming statt Bytes-Buffer
 
 **Status:** offen
 **Priorität:** niedrig–mittel
@@ -269,11 +237,11 @@ nochmal retry'd wird? Wer schließt das File? Memory-Map vs. Streaming?
 **Nutzen:** Sehr hoch — eliminiert OOM-Risiko bei großen Clips, der
 einzige reale Show-Stopper im Memory-Bereich.
 
-**Empfehlung:** Erst nach Punkt 6 (Tests) angehen.
+**Empfehlung:** Erst nach Punkt 5 (Tests) angehen.
 
 ---
 
-## 9. `fetch_all_events` als Generator (Streaming)
+## 8. `fetch_all_events` als Generator (Streaming)
 
 **Status:** offen
 **Priorität:** niedrig
@@ -291,7 +259,7 @@ und der Memory-Footprint konstant bleibt.
 
 ---
 
-## 10. Threading / Parallel-Uploads (mit SQLite-Warnung)
+## 9. Threading / Parallel-Uploads (mit SQLite-Warnung)
 
 **Status:** offen
 **Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
@@ -340,6 +308,7 @@ Voraussetzungen erfüllt sein:
 - [x] **Mattermost-Benachrichtigung bei Aufgabe:** Event-Details, Kamera, Label, direkte Clip/Snapshot-URLs
 - [x] **Download-Progress-Logging:** INFO-Level alle 50MB für Diagnose von Freeze-Punkten
 - [x] **ChunkedEncodingError-Diagnose:** README-Doku für "korrupte Frigate-Segmente" hinzugefügt
+- [x] **Konfigurations-Validierung beim Start:** `validate_config()` in `main()` prüft alle Pflicht-Variablen (`FRIGATE_URL`, `MQTT_*`, `SERVICE_ACCOUNT_FILE`, `UPLOAD_DIR`) und validiert Ranges (`MQTT_PORT`, `MAX_RETRY_ATTEMPTS`). Sammelt ALLE Fehler vor dem Beenden, gibt pro Problem eine klare Fehlermeldung mit konkretem Fix-Hinweis (`CONFIG ERROR: FRIGATE_URL is not set. Please add...`). URL-Sanity-Check (`http://` oder `https://`). File-Existenz-Check für Service-Account. Maskiertes Config-Logging beim Start: alle aktiven Werte mit `***` für Secrets, damit man sofort sieht was geladen wurde. Fail-fast statt kryptischer Runtime-Crashes deep im Request-Stack.
 - [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 1 oben)
 - [x] **Healthcheck-HTTP-API mit `/health` und `/status`:** Stdlib-only `ThreadingHTTPServer` (keine neue Dependency), bind via `HEALTHCHECK_BIND` (default `0.0.0.0`) auf `HEALTHCHECK_PORT` (default `8080`). `/health` ist unauthenticated (Docker-`HEALTHCHECK`-Probe), liefert `200` wenn DB + Scheduler ok, `503` wenn nicht oder während Shutdown — MQTT-Disconnects flunken bewusst NICHT (periodischer Job ist das Sicherheitsnetz). `/status` liefert detailliertes JSON mit Stats und Error-Kind-Aufschlüsselung, optional via `HEALTHCHECK_TOKEN` mit Bearer-Token gesichert (constant-time-Vergleich via `hmac.compare_digest`). Sicherheitshärtung: Methoden-Whitelist (nur GET/HEAD), Security-Header (`X-Content-Type-Options`, `X-Frame-Options`, `Cache-Control: no-store`), Access-Logs unterdrückt, keine sensiblen Daten im Body (keine Pfade, URLs, Webhooks, Event-IDs). `Dockerfile` bekommt `HEALTHCHECK`-Direktive (probt `127.0.0.1` via stdlib `urllib`, kein curl-Dep). Verifikation: 14 isolierte Tests für Happy-Path, Subsystem-Failures, Auth-Wrong/Right/Open, HEAD/POST/404, Security-Header.
 - [x] **`SKIP_EVENTS_LONGER_THAN_SECONDS` Dauer-Filter:** Neue Env-Variable (Default `0` = off, Wert in Sekunden). Greift in `handle_single_event` direkt nach dem DB-Insert und bevor irgendein Frigate-Clip-Roundtrip stattfindet — also auch im MQTT-Pfad ohne zusätzliche API-Calls. Komplementär zu `MAX_CLIP_SIZE`: fängt Events ab, die zwar klein, aber sehr lang sind (z.B. 5h Low-Bitrate-Crop, 1.5 GB). Event wird via `update_event_retry(0, last_error_kind=ERR_EVENT_TOO_LONG)` non-retriable markiert, Metadaten bleiben in der DB.

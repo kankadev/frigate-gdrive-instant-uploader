@@ -145,6 +145,102 @@ if SKIP_EVENTS_LONGER_THAN_SECONDS > 0:
     )
 
 
+# ---------------------------------------------------------------------------
+# Configuration validation
+# ---------------------------------------------------------------------------
+
+
+def validate_config():
+    """
+    Validate all required configuration variables at startup.
+
+    Collects every problem first, prints one clear error per issue with a
+    concrete fix hint, and exits with code 1 so the container fails fast
+    instead of crashing deep in a request stack with a cryptic traceback.
+    """
+    errors = []
+
+    # --- required string variables ------------------------------------------------
+    _required_strings = {
+        'FRIGATE_URL': FRIGATE_URL,
+        'MQTT_BROKER_ADDRESS': MQTT_BROKER_ADDRESS,
+        'MQTT_TOPIC': MQTT_TOPIC,
+        'MQTT_USER': MQTT_USER,
+        'MQTT_PASSWORD': MQTT_PASSWORD,
+    }
+    for name, value in _required_strings.items():
+        if not value or not str(value).strip():
+            errors.append(f"CONFIG ERROR: {name} is not set or empty.")
+
+    # --- Google Drive variables (read directly via os.getenv because
+    #     google_drive.py initialises the service on module import, so we
+    #     cannot rely on its module-level attributes being reachable before
+    #     a potential import crash.)
+    _service_file = os.getenv('SERVICE_ACCOUNT_FILE', '').strip()
+    if not _service_file:
+        errors.append("CONFIG ERROR: SERVICE_ACCOUNT_FILE is not set.")
+    elif not os.path.isfile(_service_file):
+        errors.append(
+            f"CONFIG ERROR: SERVICE_ACCOUNT_FILE does not exist: {_service_file}"
+        )
+
+    _upload_dir = os.getenv('UPLOAD_DIR', '').strip()
+    if not _upload_dir:
+        errors.append("CONFIG ERROR: UPLOAD_DIR is not set.")
+
+    # --- numeric / range validations ----------------------------------------------
+    if not (1 <= MQTT_PORT <= 65535):
+        errors.append(
+            f"CONFIG ERROR: MQTT_PORT={MQTT_PORT} is out of range (1-65535)."
+        )
+
+    if MAX_RETRY_ATTEMPTS < 0:
+        errors.append(
+            f"CONFIG ERROR: MAX_RETRY_ATTEMPTS={MAX_RETRY_ATTEMPTS} must be >= 0."
+        )
+
+    # --- FRIGATE_URL sanity check -------------------------------------------------
+    _frigate = str(FRIGATE_URL).strip()
+    if _frigate and not (_frigate.startswith('http://') or _frigate.startswith('https://')):
+        errors.append(
+            f"CONFIG ERROR: FRIGATE_URL='{_frigate}' must start with http:// or https://."
+        )
+
+    # --- print all errors at once, then die ---------------------------------------
+    if errors:
+        for err in errors:
+            logging.error(err)
+        logging.error(
+            "Please add the missing variables to your .env file and restart the container."
+        )
+        sys.exit(1)
+
+    # --- log active configuration (secrets masked) --------------------------------
+    logging.info("Configuration validated successfully.")
+    logging.info(f"  FRIGATE_URL={FRIGATE_URL}")
+    logging.info(f"  MQTT_BROKER_ADDRESS={MQTT_BROKER_ADDRESS}")
+    logging.info(f"  MQTT_PORT={MQTT_PORT}")
+    logging.info(f"  MQTT_TOPIC={MQTT_TOPIC}")
+    logging.info(f"  MQTT_USER={MQTT_USER}")
+    logging.info(f"  MQTT_PASSWORD={'***' if MQTT_PASSWORD else '(empty)'}")
+    logging.info(f"  UPLOAD_DIR={_upload_dir}")
+    logging.info(f"  SERVICE_ACCOUNT_FILE={_service_file}")
+    _impersonate = os.getenv('GOOGLE_ACCOUNT_TO_IMPERSONATE', '').strip()
+    logging.info(f"  GOOGLE_ACCOUNT_TO_IMPERSONATE={_impersonate or '(none)'}")
+    _max_clip = os.getenv('MAX_CLIP_SIZE', '').strip()
+    logging.info(f"  MAX_CLIP_SIZE={_max_clip or '(unlimited)'}")
+    logging.info(f"  MAX_RETRY_ATTEMPTS={MAX_RETRY_ATTEMPTS}")
+    logging.info(f"  SKIP_EVENTS_LONGER_THAN_SECONDS={SKIP_EVENTS_LONGER_THAN_SECONDS}")
+    logging.info(f"  DB_RETENTION_DAYS={os.getenv('DB_RETENTION_DAYS', '30')}")
+    logging.info(f"  GDRIVE_RETENTION_DAYS={os.getenv('GDRIVE_RETENTION_DAYS', '0')}")
+    logging.info(f"  HEALTH_REPORT_TIME={HEALTH_REPORT_TIME}")
+    logging.info(f"  HEALTH_REPORT_ONLY_ON_ISSUES={HEALTH_REPORT_ONLY_ON_ISSUES}")
+    logging.info(f"  HEALTHCHECK_BIND={HEALTHCHECK_BIND}")
+    logging.info(f"  HEALTHCHECK_PORT={HEALTHCHECK_PORT}")
+    logging.info(f"  HEALTHCHECK_TOKEN={'***' if HEALTHCHECK_TOKEN else '(none)'}")
+    logging.info(f"  MATTERMOST_WEBHOOK_URL={'***' if MATTERMOST_WEBHOOK_URL else '(none)'}")
+
+
 def parse_bool_env(value, default=False):
     """
     Parses a boolean env var. Accepts the usual suspects (case-insensitive):
@@ -758,6 +854,8 @@ def main():
     """
     Main function to initialize services and process events.
     """
+    validate_config()
+
     logging.debug("Initializing database...")
     init_db_and_run_migrations()
 
