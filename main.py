@@ -153,12 +153,17 @@ def get_max_retries_for_event(event_data):
     return MAX_RETRY_ATTEMPTS
 
 
-def handle_single_event(event_data, skip_wait=False):
+def handle_single_event(event_data, skip_wait=False, online=None):
     """
     Handles a single event. Uploads the video to Google Drive if available and updates the database.
     :param event_data:
     :param skip_wait: If True, skip the 5-second wait (useful for retrying old events).
-    :return:
+    :param online: Tri-state. If True/False, skip the per-event internet() check and use
+        the provided value (callers in batch jobs should pre-check once). If None, fall
+        back to calling internet() inline (used by the MQTT single-event path).
+    :return: bool. False if an upload was attempted in this call and failed for
+        potentially-network reasons (caller may want to re-check connectivity).
+        True otherwise (skipped, succeeded, hard-fail like ClipNotAvailable, etc.).
     """
     event_id = event_data['id']
     end_time = event_data['end_time']
@@ -172,7 +177,10 @@ def handle_single_event(event_data, skip_wait=False):
     if not database.is_event_exists(event_id):
         database.insert_event(event_id, start_time)
 
-    if end_time is not None and has_clip is True and internet() is True:
+    if online is None:
+        online = internet()
+
+    if end_time is not None and has_clip is True and online is True:
         if database.select_retry(event_id) == 0:
             logging.debug(f"Event {event_id} is marked as non-retriable. Skipping upload.")
         else:
@@ -191,14 +199,14 @@ def handle_single_event(event_data, skip_wait=False):
                         f"Removing from database. Reason: {e}"
                     )
                     database.delete_event(event_id)
-                    return
+                    return True
                 except ClipTooLargeError as e:
                     logging.warning(
                         f"Skipping clip for event {event_id} (recorded {recorded_at}). "
                         f"Reason: {e} Marking as non-retriable."
                     )
                     database.update_event_retry(event_id, 0)
-                    return
+                    return True
                 if success:
                     logging.info(f"Video {event_id} (recorded {recorded_at}) successfully uploaded.")
                     database.update_event(event_id, 1)
@@ -260,12 +268,25 @@ def handle_single_event(event_data, skip_wait=False):
                         )
                     else:
                         logging.warning(msg)
+                    # Upload was attempted and failed — possibly network related.
+                    # Signal caller so it can re-check connectivity before continuing.
+                    return False
             else:
                 logging.debug(f"Event {event_id} already uploaded. Skipping...")
+    return True
 
 
 def handle_all_events():
     logging.info("=== handle_all_events started ===")
+
+    # One internet check at job start instead of one per event. Uploads will fail
+    # naturally if connectivity drops mid-loop; we re-check after each failure below.
+    online = internet()
+    if not online:
+        logging.warning("No internet connectivity at handle_all_events start. Skipping job.")
+        logging.info("=== handle_all_events completed (skipped, offline) ===")
+        return
+
     latest_start_time = database.get_latest_event_start_time()
     logging.debug(f"Fetching all events from Frigate since {latest_start_time}...")
     all_events = fetch_all_events(FRIGATE_URL, after=latest_start_time, batch_size=100)
@@ -282,7 +303,13 @@ def handle_all_events():
         i = 1
         for event in all_events:
             logging.debug(f"Handling event #{i}: {event['id']} in handle_all_events")
-            handle_single_event(event)
+            ok = handle_single_event(event, online=True)
+            if ok is False and not internet():
+                logging.warning(
+                    f"Lost internet connectivity after event {event.get('id')}. "
+                    f"Aborting handle_all_events loop after {i} of {len(all_events)} events."
+                )
+                break
             i = i + 1
         logging.info(f"=== handle_all_events completed. Processed {i - 1} new events. ===")
 
@@ -331,6 +358,15 @@ def mqtt_handler():
 
 def handle_not_uploaded_events():
     logging.info("=== handle_not_uploaded_events started ===")
+
+    # One internet check at job start. Saves up to (event_count × 3s) timeouts
+    # in case of a full outage. The loop re-checks on individual failures below
+    # to handle the rare race where connectivity drops mid-job.
+    if not internet():
+        logging.warning("No internet connectivity at handle_not_uploaded_events start. Skipping retry loop.")
+        logging.info("=== handle_not_uploaded_events completed (skipped, offline) ===")
+        return
+
     event_ids = database.select_not_uploaded_yet()
     if not event_ids:
         logging.info("No pending events to retry.")
@@ -339,6 +375,7 @@ def handle_not_uploaded_events():
 
     logging.info(f"Found {len(event_ids)} pending events to retry (oldest first).")
     consecutive_timeouts = 0
+    processed = 0
     for event_id in event_ids:
         # Check reachability before every individual event so one slow/busy
         # moment on Frigate does not abort the entire retry queue.
@@ -354,14 +391,28 @@ def handle_not_uploaded_events():
         logging.info(f"Retrying event {event_id}...")
         try:
             event_data = fetch_event(FRIGATE_URL, event_id)
-            handle_single_event(event_data, skip_wait=True)
+            ok = handle_single_event(event_data, skip_wait=True, online=True)
         except EventNotFoundError:
             logging.warning(f"Event {event_id} no longer exists on Frigate. Removing from database.")
             database.delete_event(event_id)
+            processed += 1
+            continue
         except FrigateUnreachableError:
             logging.warning(f"Frigate became unreachable during retry for event {event_id}. Skipping to next.")
             continue
-    logging.info(f"=== handle_not_uploaded_events completed. Retried {len(event_ids)} events. ===")
+
+        processed += 1
+
+        # Race-condition safety net: an upload failed in this iteration. Verify
+        # internet is still up; if not, abort instead of burning through the
+        # entire backlog with guaranteed-failing uploads.
+        if ok is False and not internet():
+            logging.warning(
+                f"Lost internet connectivity after event {event_id}. "
+                f"Aborting retry loop after {processed} of {len(event_ids)} events."
+            )
+            break
+    logging.info(f"=== handle_not_uploaded_events completed. Retried {processed} of {len(event_ids)} events. ===")
 
 
 def run_every_x_minutes():
@@ -457,16 +508,18 @@ def run_every_6_hours():
 
 def internet(host="8.8.8.8", port=53, timeout=3):
     """
-    Host: 8.8.8.8 (google-public-dns-a.google.com)
-    OpenPort: 53/tcp
-    Service: domain (DNS/TCP)
+    Quick connectivity check: TCP-connect to a well-known DNS endpoint.
+    Returns True if reachable within `timeout` seconds, else False.
+
+    Uses socket.create_connection with a per-call timeout so it does NOT mutate
+    the process-wide socket default timeout (unlike socket.setdefaulttimeout()).
+    The socket is closed deterministically via the context manager.
     """
     try:
-        socket.setdefaulttimeout(timeout)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
-        return True
-    except socket.error as ex:
-        print(ex)
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError as ex:
+        logging.debug(f"Internet check failed: {ex}")
         return False
 
 
