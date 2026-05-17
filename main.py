@@ -143,7 +143,9 @@ def get_max_retries_for_event(event_data):
     Long events are more likely to hit systematic Frigate clip assembly bugs
     that don't resolve with more retries, so we give up faster.
     """
-    duration_sec = event_data.get('end_time', 0) - event_data.get('start_time', 0)
+    end_time = event_data.get('end_time') or 0
+    start_time = event_data.get('start_time') or 0
+    duration_sec = end_time - start_time
     if duration_sec > 3 * 3600:       # > 3 hours
         return 3   # 3 retries × 10 min = 30 min total wait
     elif duration_sec > 1 * 3600:     # > 1 hour
