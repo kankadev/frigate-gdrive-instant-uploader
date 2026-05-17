@@ -183,6 +183,21 @@ The uploader will give up on such events faster (3 retries for >3 h events, 10 f
 1–3 h) and send a **Mattermost notification** with the direct clip URL so you can
 try a manual download before Frigate's retention expires.
 
+## MQTT disconnects during long downloads
+
+If you see `MQTT disconnected with result code: Keep alive timeout` while a large
+event is downloading, this is expected. The MQTT client thread is blocked by the
+upload and cannot send ping packets to the broker. The client reconnects
+automatically within seconds.
+
+**Impact:** New "instant" events arriving during the disconnect are delayed until
+the reconnect happens or the next 10-minute periodic job picks them up.
+
+**Schnellfix:** keepalive raised to 180s (disconnect after ~270s instead of ~90s).
+
+**Richtige Lösung:** Run `handle_single_event` in a background thread so
+`on_message` returns immediately. See `PLAN.md` point 9.
+
 Inspect the local database:
 ```bash
 docker exec -it frigate-gdrive-instant-uploader sqlite3 /app/db/events.db

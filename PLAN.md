@@ -144,7 +144,45 @@ und der Memory-Footprint konstant bleibt.
 
 ---
 
-## 9. Threading / Parallel-Uploads (mit SQLite-Warnung)
+## 9. MQTT `on_message` in separaten Thread auslagern
+
+**Status:** offen
+**Priorität:** hoch
+
+`on_message` (in `main.py`) ruft direkt `handle_single_event()` auf, was bei einem
+10-Minuten-Download den **gesamten MQTT-Client-Thread blockiert**. Der Broker
+pingt nicht mehr → Keepalive-Timeout → Disconnect.
+
+**Schnellfix:** keepalive auf 180s erhöht (Done). Das verschiebt das Problem
+von ~90s auf ~270s, aber bei riesigen Events (>3h) reicht auch das nicht.
+
+**Richtige Lösung:**
+```python
+# Statt direktem Aufruf:
+handle_single_event(event_data)
+
+# In einen Daemon-Thread auslagern:
+threading.Thread(
+    target=handle_single_event,
+    args=(event_data,),
+    daemon=True
+).start()
+```
+
+Das lässt `on_message` sofort zurückkehren. Der MQTT-Loop kann weiter pingen
+und neue Events empfangen.
+
+**Abhängigkeit:** Punkt 10 (Threading / Parallel-Uploads) — die gleichen
+SQLite-Concurrency-Probleme gelten hier. WAL-Mode hilft, aber Connection-Sharing
+zwischen Threads kann trotzdem zu `database is locked` führen.
+
+**Aufwand:** mittel (Threading + DB-Connection-Handling).
+**Nutzen:** Keine MQTT-Disconnects mehr, Events werden sofort empfangen statt
+verspätet.
+
+---
+
+## 10. Threading / Parallel-Uploads (mit SQLite-Warnung)
 
 **Status:** offen
 **Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
@@ -193,3 +231,5 @@ Voraussetzungen erfüllt sein:
 - [x] **Mattermost-Benachrichtigung bei Aufgabe:** Event-Details, Kamera, Label, direkte Clip/Snapshot-URLs
 - [x] **Download-Progress-Logging:** INFO-Level alle 50MB für Diagnose von Freeze-Punkten
 - [x] **ChunkedEncodingError-Diagnose:** README-Doku für "korrupte Frigate-Segmente" hinzugefügt
+- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 9)
+- [x] **Download-Logs mit event_id:** Alle Progress/Complete/Abort-Messages enthalten jetzt die Event-ID für bessere Traceability bei parallelen Downloads
