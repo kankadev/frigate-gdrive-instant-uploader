@@ -3,24 +3,7 @@
 Sammlung von Verbesserungen, die das Tool stabiler, schneller oder
 ressourcen-schonender machen würden. Reihenfolge nach geschätztem Nutzen.
 
-## 1. Frigate-Reachability-Check vor dem Retry-Job
-
-**Status:** offen
-**Priorität:** mittel
-
-Wenn Frigate komplett offline ist (LXC neugestartet, Netzwerk weg), schlagen
-alle Retries fehl und produzieren Notifications. Erst ein einmaliger
-Health-Check könnte den Job direkt abbrechen.
-
-**Vorschlag:** Am Anfang von `handle_not_uploaded_events()`: ein einziger
-`GET /api/version` auf Frigate. Wenn nicht erreichbar → Job überspringen
-mit `WARNING`-Log statt 400× Fehler.
-
-**Aufwand:** klein, hoher Nutzen bei Netzwerk-Ausfällen.
-
----
-
-## 2. Strukturierte Fehlerstatistiken in der DB
+## 1. Strukturierte Fehlerstatistiken in der DB
 
 **Status:** offen
 **Priorität:** niedrig
@@ -35,7 +18,7 @@ Schritt es jeweils gescheitert ist (Download? Upload? Auth?).
 
 ---
 
-## 3. Maximale Event-Dauer für Uploads
+## 2. Maximale Event-Dauer für Uploads
 
 **Status:** offen
 **Priorität:** mittel
@@ -56,7 +39,7 @@ Durchsatz bei Backlogs.
 
 ---
 
-## 4. Maximale Clip-Größe überspringen (`MAX_CLIP_SIZE`)
+## 3. Maximale Clip-Größe überspringen (`MAX_CLIP_SIZE`)
 
 **Status:** offen
 **Priorität:** mittel
@@ -84,7 +67,7 @@ ablehnen.
 
 ---
 
-## 5. `fetch_all_events` als Generator (Streaming)
+## 4. `fetch_all_events` als Generator (Streaming)
 
 **Status:** offen
 **Priorität:** niedrig
@@ -102,7 +85,7 @@ und der Memory-Footprint konstant bleibt.
 
 ---
 
-## 6. MQTT `on_message` in separaten Thread auslagern
+## 5. MQTT `on_message` in separaten Thread auslagern
 
 **Status:** offen
 **Priorität:** hoch
@@ -130,7 +113,7 @@ threading.Thread(
 Das lässt `on_message` sofort zurückkehren. Der MQTT-Loop kann weiter pingen
 und neue Events empfangen.
 
-**Abhängigkeit:** Punkt 7 (Threading / Parallel-Uploads) — die gleichen
+**Abhängigkeit:** Punkt 6 (Threading / Parallel-Uploads) — die gleichen
 SQLite-Concurrency-Probleme gelten hier. WAL-Mode hilft, aber Connection-Sharing
 zwischen Threads kann trotzdem zu `database is locked` führen.
 
@@ -140,7 +123,7 @@ verspätet.
 
 ---
 
-## 7. Threading / Parallel-Uploads (mit SQLite-Warnung)
+## 6. Threading / Parallel-Uploads (mit SQLite-Warnung)
 
 **Status:** offen
 **Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
@@ -189,7 +172,8 @@ Voraussetzungen erfüllt sein:
 - [x] **Mattermost-Benachrichtigung bei Aufgabe:** Event-Details, Kamera, Label, direkte Clip/Snapshot-URLs
 - [x] **Download-Progress-Logging:** INFO-Level alle 50MB für Diagnose von Freeze-Punkten
 - [x] **ChunkedEncodingError-Diagnose:** README-Doku für "korrupte Frigate-Segmente" hinzugefügt
-- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 6 oben)
+- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 5 oben)
+- [x] **Frigate-Reachability-Pre-Check pro Job-Lauf:** `handle_not_uploaded_events()` und `handle_all_events()` prüfen am Job-Anfang per `check_frigate_reachable()`, ob Frigate erreichbar ist. Default-Timeout der Funktion von 120s auf 10s reduziert (`/api/version` antwortet in Millisekunden, langer Timeout war historisch falsch). Bei Frigate-Outage wird der gesamte Job in 10s übersprungen statt bis zu 6 min Reachability-Timeouts zu durchlaufen. Der bestehende Per-Event-Check im Retry-Loop bleibt als Race-Schutz erhalten und profitiert ebenfalls vom kürzeren Timeout.
 - [x] **"Alles-OK"-Stille-Modus für Daily Health Report:** Neue Env-Variable `HEALTH_REPORT_ONLY_ON_ISSUES` (default `false`). Bei `true` werden OK-Reports nicht mehr an Mattermost geschickt, sondern nur als INFO-Log mit Kennzahlen festgehalten. WARNING und CRITICAL werden immer gesendet. Generischer `parse_bool_env()`-Helper akzeptiert true/false, yes/no, 1/0, on/off.
 - [x] **Konfigurierbare Uhrzeit für Daily Health Report:** Neue Env-Variable `HEALTH_REPORT_TIME` (Format `HH:MM`, Default `09:00`, Container-TZ). Invalide Werte fallen mit WARNING-Log auf `09:00` zurück.
 - [x] **Internet-Check 1× pro Job-Lauf statt pro Event:** `handle_not_uploaded_events()` und `handle_all_events()` rufen `internet()` einmal am Job-Anfang. `handle_single_event` akzeptiert `online`-Parameter (tri-state) und liefert `bool` zurück. Bei einem Upload-Fehler im Loop wird `internet()` neu geprüft und der Loop sauber abgebrochen, falls Konnektivität mittendrin verloren geht. Spart bei Internet-Outage bis zu 20 min an DNS-Timeouts pro 400-Event-Backlog.
