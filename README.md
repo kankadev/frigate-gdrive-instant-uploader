@@ -93,6 +93,7 @@ All configuration is read from `.env` (use `env_example` as template).
 | `MAX_RETRY_ATTEMPTS` | `50` | Give up retrying a single event after this many failed attempts (≈8 h) |
 | `MAX_CLIP_SIZE` | – | Skip clips larger than this (e.g. `5GB`, `500MB`). `0` or empty = no limit. Marked as non-retriable. |
 | `HEALTH_REPORT_TIME` | `09:00` | Time of day (24h `HH:MM`, container timezone) to send the Daily Health Report. Invalid values fall back to `09:00`. |
+| `HEALTH_REPORT_ONLY_ON_ISSUES` | `false` | When `true`, OK reports are only logged (INFO), not sent to Mattermost. WARNING / CRITICAL reports are always sent. |
 | `GDRIVE_RETENTION_DAYS` | `0` | Delete physical files in Drive older than this many days (`0` = off) |
 | `MATTERMOST_WEBHOOK_URL` | – | Optional. Enables error alerts and the Daily Health Report |
 | `MATTERMOST_PREFIX` | – | Optional. String prepended to every Mattermost message |
@@ -113,6 +114,8 @@ When `MATTERMOST_WEBHOOK_URL` is configured, a daily summary is posted at `HEALT
 - :white_check_mark: **OK (green):** all uploads healthy
 - :warning: **WARNING (orange):** events pending for 1–3 days
 - :rotating_light: **CRITICAL (red):** events pending > 3 days, or no uploads in last 24h while backlog exists
+
+Set `HEALTH_REPORT_ONLY_ON_ISSUES=true` to suppress OK messages — useful if you only want to hear from the tool when something is wrong. WARNING and CRITICAL are always sent.
 
 The CRITICAL message includes copy-paste-ready debug commands.
 

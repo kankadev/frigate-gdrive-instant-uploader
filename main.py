@@ -94,6 +94,27 @@ MATTERMOST_WEBHOOK_URL = os.getenv('MATTERMOST_WEBHOOK_URL')
 HEALTH_REPORT_TIME = os.getenv('HEALTH_REPORT_TIME', '09:00')
 
 
+def parse_bool_env(value, default=False):
+    """
+    Parses a boolean env var. Accepts the usual suspects (case-insensitive):
+      true/false, yes/no, on/off, 1/0, y/n, t/f.
+    Returns `default` for None or unrecognised values.
+    """
+    if value is None:
+        return default
+    v = value.strip().lower()
+    if v in ('1', 'true', 'yes', 'on', 'y', 't'):
+        return True
+    if v in ('0', 'false', 'no', 'off', 'n', 'f', ''):
+        return False
+    return default
+
+
+# When True, suppress the Mattermost message of an OK Daily Health Report
+# (WARNING / CRITICAL reports are always sent). Default: False (send always).
+HEALTH_REPORT_ONLY_ON_ISSUES = parse_bool_env(os.getenv('HEALTH_REPORT_ONLY_ON_ISSUES'), default=False)
+
+
 def parse_health_report_time(value, default_hour=9, default_minute=0):
     """
     Parse HEALTH_REPORT_TIME env var ('HH:MM' in 24h) into (hour, minute).
@@ -513,6 +534,16 @@ def daily_health_report():
             "- DB-Zustand prüfen: `SELECT date(created), COUNT(*) FROM events WHERE uploaded=0 GROUP BY 1;`\n"
             "- Frigate-Erreichbarkeit & Internet überprüfen\n"
         )
+
+    is_ok = not is_critical and not is_warning
+    if is_ok and HEALTH_REPORT_ONLY_ON_ISSUES:
+        logging.info(
+            "Daily health report: OK (suppressed Mattermost notification — "
+            "HEALTH_REPORT_ONLY_ON_ISSUES=true). "
+            f"Stats: uploaded_last_24h={stats['uploaded_last_24h']}, "
+            f"pending_total={stats['pending_total']}."
+        )
+        return
 
     send_mattermost_notification(title=title, text=text, color=color)
     logging.info(f"Health report sent: {title}")
