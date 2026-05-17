@@ -91,6 +91,7 @@ All configuration is read from `.env` (use `env_example` as template).
 | `UPLOAD_DIR` | `frigate` | Root folder in Drive; videos go to `/UPLOAD_DIR/YYYY/MM/DD/` |
 | `DB_RETENTION_DAYS` | `30` | Delete SQLite rows older than this, regardless of upload status. Drive files unaffected |
 | `MAX_RETRY_ATTEMPTS` | `50` | Give up retrying a single event after this many failed attempts (≈8 h) |
+| `MAX_CLIP_SIZE` | – | Skip clips larger than this (e.g. `5GB`, `500MB`). `0` or empty = no limit. Marked as non-retriable. |
 | `GDRIVE_RETENTION_DAYS` | `0` | Delete physical files in Drive older than this many days (`0` = off) |
 | `MATTERMOST_WEBHOOK_URL` | – | Optional. Enables error alerts and the Daily Health Report |
 | `MATTERMOST_PREFIX` | – | Optional. String prepended to every Mattermost message |
@@ -143,6 +144,9 @@ the uploader.
    > **Why not higher?** Values above 600 s block the upload queue for too long
    > when Frigate has a systematic clip-assembly bug (e.g. a corrupt recording segment).
    > The uploader uses dynamic retry limits: events >3 h get only 3 retries (~30 min total).
+   >
+   > **Alternative:** set `MAX_CLIP_SIZE` (e.g. `5GB`) to skip oversized clips instantly
+   > instead of downloading them for minutes. Skipped clips are marked as non-retriable.
 3. Mount the custom file into the Frigate container (read-only) via `docker-compose.yml`:
    ```yaml
    services:
