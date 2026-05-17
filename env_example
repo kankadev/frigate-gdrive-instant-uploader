@@ -28,6 +28,15 @@ MAX_RETRY_ATTEMPTS=50
 # Set to 0 or leave empty to disable the limit.
 MAX_CLIP_SIZE=5GB
 
+# Optional: Skip events whose duration (end_time - start_time) exceeds this
+# number of seconds. Useful as a complement to MAX_CLIP_SIZE: catches long
+# but low-bitrate events (e.g. a 5h "stationary object" clip that ends up at
+# 1.5 GB and would slip past MAX_CLIP_SIZE=5GB). Also avoids the expensive
+# Frigate clip-assembly roundtrip on the /clip.mp4 endpoint, which can hang
+# for minutes on very long events. Value is in seconds. Set to 0 or leave
+# empty to disable. Example: 14400 = 4h.
+SKIP_EVENTS_LONGER_THAN_SECONDS=0
+
 # MQTT
 MQTT_BROKER_ADDRESS=192.168.0.59
 MQTT_TOPIC=frigate/events

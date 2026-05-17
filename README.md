@@ -92,6 +92,7 @@ All configuration is read from `.env` (use `env_example` as template).
 | `DB_RETENTION_DAYS` | `30` | Delete SQLite rows older than this, regardless of upload status. Drive files unaffected |
 | `MAX_RETRY_ATTEMPTS` | `50` | Give up retrying a single event after this many failed attempts (≈8 h) |
 | `MAX_CLIP_SIZE` | – | Skip clips larger than this (e.g. `5GB`, `500MB`). `0` or empty = no limit. Marked as non-retriable. |
+| `SKIP_EVENTS_LONGER_THAN_SECONDS` | `0` | Skip events whose duration (`end_time - start_time`) exceeds this. Complements `MAX_CLIP_SIZE` for long-but-small clips and avoids Frigate clip-assembly hangs. `0` = off. Example: `14400` = 4h. |
 | `HEALTH_REPORT_TIME` | `09:00` | Time of day (24h `HH:MM`, container timezone) to send the Daily Health Report. Invalid values fall back to `09:00`. |
 | `HEALTH_REPORT_ONLY_ON_ISSUES` | `false` | When `true`, OK reports are only logged (INFO), not sent to Mattermost. WARNING / CRITICAL reports are always sent. |
 | `GDRIVE_RETENTION_DAYS` | `0` | Delete physical files in Drive older than this many days (`0` = off) |

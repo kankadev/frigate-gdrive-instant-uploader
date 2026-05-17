@@ -3,28 +3,7 @@
 Sammlung von Verbesserungen, die das Tool stabiler, schneller oder
 ressourcen-schonender machen würden. Reihenfolge nach geschätztem Nutzen.
 
-## 1. Maximale Event-Dauer für Uploads
-
-**Status:** offen
-**Priorität:** mittel
-
-Events mit extrem langen Dauern (z.B. 5+ Stunden bei "stationary objects"
-wie schlafende Katzen) erzeugen riesige Clips. Frigate braucht Minuten,
-um diese zusammenzusetzen, und blockiert dabei die API. Der Upload-Loop
-steht still.
-
-**Vorschlag:** Konfigurierbarer Parameter `SKIP_EVENTS_LONGER_THAN_SECONDS`
-(Default z.B. 7200s = 2h). Events, die länger dauern, als `retry=0`
-markieren (nicht löschen, damit die Metadaten erhalten bleiben).
-
-**Aufwand:** klein.
-
-**Nutzen:** Loop hängt nicht mehr an 5-Stunden-Events, deutlich schnellerer
-Durchsatz bei Backlogs.
-
----
-
-## 2. `fetch_all_events` als Generator (Streaming)
+## 1. `fetch_all_events` als Generator (Streaming)
 
 **Status:** offen
 **Priorität:** niedrig
@@ -42,7 +21,7 @@ und der Memory-Footprint konstant bleibt.
 
 ---
 
-## 3. MQTT `on_message` in separaten Thread auslagern
+## 2. MQTT `on_message` in separaten Thread auslagern
 
 **Status:** offen
 **Priorität:** hoch
@@ -70,7 +49,7 @@ threading.Thread(
 Das lässt `on_message` sofort zurückkehren. Der MQTT-Loop kann weiter pingen
 und neue Events empfangen.
 
-**Abhängigkeit:** Punkt 4 (Threading / Parallel-Uploads) — die gleichen
+**Abhängigkeit:** Punkt 3 (Threading / Parallel-Uploads) — die gleichen
 SQLite-Concurrency-Probleme gelten hier. WAL-Mode hilft, aber Connection-Sharing
 zwischen Threads kann trotzdem zu `database is locked` führen.
 
@@ -80,7 +59,7 @@ verspätet.
 
 ---
 
-## 4. Threading / Parallel-Uploads (mit SQLite-Warnung)
+## 3. Threading / Parallel-Uploads (mit SQLite-Warnung)
 
 **Status:** offen
 **Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
@@ -129,7 +108,8 @@ Voraussetzungen erfüllt sein:
 - [x] **Mattermost-Benachrichtigung bei Aufgabe:** Event-Details, Kamera, Label, direkte Clip/Snapshot-URLs
 - [x] **Download-Progress-Logging:** INFO-Level alle 50MB für Diagnose von Freeze-Punkten
 - [x] **ChunkedEncodingError-Diagnose:** README-Doku für "korrupte Frigate-Segmente" hinzugefügt
-- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 3 oben)
+- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 2 oben)
+- [x] **`SKIP_EVENTS_LONGER_THAN_SECONDS` Dauer-Filter:** Neue Env-Variable (Default `0` = off, Wert in Sekunden). Greift in `handle_single_event` direkt nach dem DB-Insert und bevor irgendein Frigate-Clip-Roundtrip stattfindet — also auch im MQTT-Pfad ohne zusätzliche API-Calls. Komplementär zu `MAX_CLIP_SIZE`: fängt Events ab, die zwar klein, aber sehr lang sind (z.B. 5h Low-Bitrate-Crop, 1.5 GB). Event wird via `update_event_retry(0, last_error_kind=ERR_EVENT_TOO_LONG)` non-retriable markiert, Metadaten bleiben in der DB.
 - [x] **`MAX_CLIP_SIZE` mit Pre-flight HEAD-Check und Streaming-Abort:** Env-Variable `MAX_CLIP_SIZE` (human-readable: `5GB`, `500MB`, `0`/leer = off). `_parse_max_clip_size()` mit Regex. Vor Download: HEAD-Request auf die Clip-URL, bei `Content-Length > Limit` sofort `ClipTooLargeError`. Falls HEAD nicht unterstützt: während des Streamings zählen und bei Überschreitung abbrechen. Event wird via `update_event_retry(0, last_error_kind=ERR_CLIP_TOO_LARGE)` als non-retriable markiert, Metadaten bleiben in der DB erhalten.
 - [x] **Strukturierte Fehlerstatistiken in der DB:** Neue Spalte `last_error_kind` (Migration 4) mit coarse-grained Kategorien (`frigate_download_timeout`, `frigate_download_5xx`, `frigate_download_truncated`, `frigate_download_empty`, `clip_too_large`, `drive_5xx`, `drive_http`, `drive_network`, `drive_other`). `upload_to_google_drive()` und `download_video_with_retry()` liefern jetzt `(result, error_kind)`-Tuples. `database.update_event()` / `update_event_retry()` akzeptieren `last_error_kind`. Bei Erfolg wird die Spalte auf NULL zurückgesetzt. Daily Health Report zeigt Aufschlüsselung der wartenden Events nach Fehler-Kategorie.
 - [x] **Edge-triggered Mattermost-Notifications bei Frigate-Outage:** State-Variable `_frigate_unreachable_since` + idempotente Helper `_notify_frigate_unreachable_once()` / `_notify_frigate_recovered_once()`. Maximal 2 Notifications pro Outage-Zyklus (Down + Recovery mit Downtime-Dauer), kein Spam bei längeren Ausfällen. Bewusst nicht für Internet-Outage (kein Webhook erreichbar). Container-Restart während Outage führt maximal zu 1 Duplikat-Notification.
