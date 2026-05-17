@@ -1,23 +1,38 @@
 # PLAN – Verbesserungsideen
 
 Sammlung von Verbesserungen, die das Tool stabiler, schneller oder
-ressourcen-schonender machen würden. Reihenfolge nach geschätztem Nutzen.
+ressourcen-schonender machen würden. Reihenfolge nach geplanter
+Umsetzungsreihenfolge (oben = als nächstes dran).
 
-## 1. `fetch_all_events` als Generator (Streaming)
+## 1. Healthcheck-Endpoint
 
 **Status:** offen
-**Priorität:** niedrig
+**Priorität:** **höchste — als nächstes umsetzen**
 
-`fetch_all_events()` in `src/frigate_api.py` lädt aktuell ALLE Events
-in eine Python-Liste. Bei 24.000+ Events kann das viel Memory fressen.
+Aktuell gibt es keine Möglichkeit, von außen zu prüfen, ob der Service noch
+ordnungsgemäß läuft. Logs zu lesen ist Workaround. Für Docker / Portainer /
+Watchtower / Kubernetes ist ein HTTP-Healthcheck Standard und würde aus dem
+Tool ein "production-grade"-Service machen.
 
-**Vorschlag:** Funktion in Generator umwandeln (`yield` statt
-`all_events.append()`), damit Events als Stream verarbeitet werden
-und der Memory-Footprint konstant bleibt.
+**Vorschlag:** Kleiner HTTP-Server (Flask/FastAPI/sogar `http.server` reicht)
+auf konfigurierbarem Port (Default `8080`):
 
-**Aufwand:** klein (nur `return all_events` → `yield event` pro Batch).
+- `GET /health` → `200 OK` wenn:
+  - DB erreichbar (`SELECT 1` geht durch)
+  - Scheduler läuft (`scheduler.running == True`)
+  - MQTT-Client verbunden (`mqtt_client.is_connected()`)
+  - Drive-Service initialisiert
+- `GET /status` (optional) → JSON mit aktuellen Stats (pending, uploaded_24h,
+  last_error_kind-Aufschlüsselung) — im Prinzip die Health-Stats als JSON.
 
-**Nutzen:** konstanter Memory-Verbrauch, unabhängig von Event-Anzahl.
+`Dockerfile` bekommt eine `HEALTHCHECK`-Direktive, `docker-compose.yml`
+exposet den Port. README dokumentiert die Endpoints.
+
+**Aufwand:** klein (~50–80 LOC + Dockerfile/Compose-Anpassung).
+
+**Nutzen:** Hoch — Container-Orchestrators sehen sofort, ob's grün ist.
+Watchtower / Auto-Restart können auf Failures reagieren. Du selbst kannst
+einen Grafana-Stat-Panel oder Uptime-Kuma dranhängen.
 
 ---
 
@@ -49,7 +64,7 @@ threading.Thread(
 Das lässt `on_message` sofort zurückkehren. Der MQTT-Loop kann weiter pingen
 und neue Events empfangen.
 
-**Abhängigkeit:** Punkt 3 (Threading / Parallel-Uploads) — die gleichen
+**Abhängigkeit:** Punkt 11 (Threading / Parallel-Uploads) — die gleichen
 SQLite-Concurrency-Probleme gelten hier. WAL-Mode hilft, aber Connection-Sharing
 zwischen Threads kann trotzdem zu `database is locked` führen.
 
@@ -59,7 +74,256 @@ verspätet.
 
 ---
 
-## 3. Threading / Parallel-Uploads (mit SQLite-Warnung)
+## 3. Drive-Folder-Cache invalidieren bei 404
+
+**Status:** offen
+**Priorität:** mittel-hoch
+
+`_folder_id_cache` in `src/google_drive.py` wird befüllt, aber **nie**
+invalidiert. Wenn der User manuell einen Ordner in Google Drive löscht (z.B.
+zum Aufräumen), nutzt das Tool für die ganze Container-Laufzeit weiterhin die
+gecachte Folder-ID → Drive antwortet `404` auf `files().create(parents=[...])`
+→ alle Uploads in diesen Ordner schlagen permanent fehl, bis der Container
+neu gestartet wird.
+
+**Vorschlag:** Im `HttpError`-Handler von `upload_to_google_drive` bei
+`status==404` mit "parent not found"-Body den entsprechenden Cache-Eintrag
+invalidieren und einmal neu auflösen, dann Retry. Alternativ: TTL auf den
+Cache (z.B. 1h) — einfacher, aber mit kleinem Performance-Tradeoff.
+
+**Aufwand:** klein (~20 LOC).
+**Nutzen:** Mittel — passiert real bei jedem User, der irgendwann mal in
+Drive aufräumt. Verhindert die Klasse "Container läuft, aber alle Uploads
+schlagen fehl bis Neustart".
+
+---
+
+## 4. Konfigurations-Validierung beim Start
+
+**Status:** offen
+**Priorität:** mittel
+
+Aktuell crasht das Tool bei fehlenden Pflicht-Variablen erst zur Laufzeit
+mit kryptischen Errors deep im Request-Stack. Beispiele:
+
+- `FRIGATE_URL=None` → erst sichtbar beim ersten `requests.get(None+'/api/...')`.
+- `MQTT_BROKER_ADDRESS=None` → `client.connect(None, 1883)` hängt mit
+  unklarer Error-Message.
+- `SERVICE_ACCOUNT_FILE` zeigt auf nicht existierende Datei → schon abgefangen,
+  aber inkonsistent zu den anderen.
+
+**Vorschlag:** Zentrale `validate_config()`-Funktion am Anfang von `main()`,
+die alle Pflicht-Variablen prüft, klare Fehlermeldungen mit Lösungshinweis
+ausgibt und sofort beendet, wenn fundamentale Configs fehlen. Beispiel:
+
+```
+CONFIG ERROR: FRIGATE_URL is not set.
+Please add FRIGATE_URL=http://your-frigate-host:5000 to your .env file.
+```
+
+Plus: einmal beim Start alle aktiven Konfigurationswerte loggen (mit
+maskierten Secrets), damit man sofort sieht, was geladen wurde.
+
+**Aufwand:** klein (~50 LOC).
+**Nutzen:** Mittel — verkürzt "warum funktioniert mein neues Setup nicht?"-
+Debugging massiv. Spart langfristig viele Stunden Frustration.
+
+---
+
+## 5. Daily Health Report mit Retry bei Mattermost-Failure
+
+**Status:** offen
+**Priorität:** mittel
+
+`send_mattermost_notification` im `daily_health_report()` ist Single-Shot.
+Wenn Mattermost um 09:00:00 für 30 Sekunden hängt, ist der ganze Tagesreport
+weg — du erfährst es erst morgen 09:00. Genau dann, wenn der Report dir
+sagen würde "es gab gestern Probleme", weißt du nichts.
+
+**Vorschlag:** Retry mit Exponential Backoff direkt in
+`send_mattermost_notification` — z.B. 3 Versuche, 30s/60s/120s. Bei
+endgültigem Fehlschlag: WARNING-Log mit Hinweis "Mattermost unreachable;
+report content was: ...".
+
+Optional: bei kritischen Reports (CRITICAL-Status) den Inhalt zusätzlich
+in eine lokale Datei `logs/missed_reports.log` schreiben, damit nichts
+verloren geht.
+
+**Aufwand:** klein (~15 LOC).
+**Nutzen:** Mittel — Daily Report ist die primäre Statusquelle. Wenn er
+silently versagt, weißt du nicht, dass du nichts weißt.
+
+---
+
+## 6. Graceful Shutdown bei SIGTERM/SIGINT
+
+**Status:** offen
+**Priorität:** mittel
+
+`main()` fängt nur `KeyboardInterrupt`/`SystemExit` ab und ruft
+`scheduler.shutdown()`. Der MQTT-Thread ist `daemon=True` und stirbt abrupt.
+Laufende Uploads in `upload_to_google_drive` werden mid-stream abgebrochen.
+Konsequenzen:
+
+- Resumable-Upload-Sessions bleiben verwaist auf Drive (Drive räumt sie nach
+  7 Tagen auf, aber bis dahin tauchen sie in Quota-Berechnungen auf).
+- Halb-geladene Files können auf Drive bleiben.
+- Der DB-Status ist u.U. inkonsistent (Event als pending markiert, aber
+  Upload war zu 80% durch).
+
+**Vorschlag:**
+- Signal-Handler für `SIGTERM` (Docker-Stop) und `SIGINT` (Ctrl+C).
+- Globales `shutdown_event = threading.Event()`.
+- `handle_*_events`-Loops prüfen `shutdown_event.is_set()` zwischen Events.
+- Aktuell laufender Upload darf zu Ende gehen mit Timeout (z.B. 60s).
+- MQTT-Client `disconnect()` sauber.
+- Scheduler `shutdown(wait=True)`.
+- Anschließend `sys.exit(0)`.
+
+**Aufwand:** mittel (~40 LOC + sorgfältiges Threading-Handling).
+**Nutzen:** Mittel — vor allem für Docker-Restarts / Container-Updates.
+Verhindert Orphan-Uploads und inkonsistente DB-States.
+
+---
+
+## 7. Tests für Parser, DB-Layer und Helpers
+
+**Status:** offen
+**Priorität:** mittel (langfristig hoch)
+
+Bei aktuell ~700 LOC in `main.py` und vielen Edge-Cases (Race-Conditions,
+Internet/Frigate-Outage-Pfade, Migration-Idempotenz, SQL-Building mit
+optionalen Parametern) gibt es kein einziges Test-File. Jedes Refactoring
+ist ein Vertrauensschritt ins Ungewisse.
+
+**Vorschlag:** `pytest` als Dev-Dependency aufnehmen, Tests/Ordner anlegen,
+und mit den einfachen, gut isolierbaren Stellen anfangen:
+
+- **Parser-Helper** (rein, deterministisch, kein I/O):
+  - `parse_bool_env()` — alle akzeptierten Truthy/Falsy-Varianten + Defaults.
+  - `parse_health_report_time()` — gültige + ungültige Werte, Fallback.
+  - `_parse_max_clip_size()` — `5GB`/`500MB`/`0`/`""`/Bogus.
+  - `_parse_skip_events_longer_than()` — Werte/Negativ/Bogus.
+  - `_format_duration()` — Sekunden/Minuten/Stunden-Grenzen.
+- **DB-Layer mit `:memory:`-SQLite-Connection:**
+  - `update_event()`-SQL-Building für alle Parameter-Kombinationen.
+  - `update_event_retry()` mit/ohne `last_error_kind`.
+  - `get_health_stats()` mit gefixtetem DB-State.
+  - Migration-Idempotenz (Run twice → kein Crash).
+- **Logik-Helper:**
+  - `get_max_retries_for_event()` Dauer-Buckets.
+  - `_notify_frigate_unreachable_once()` / `_notify_frigate_recovered_once()`
+    Edge-Triggering (mit Mock-Mattermost).
+
+**Bewusst nicht im ersten Wurf:** echte Frigate/Drive-Integration-Tests —
+die brauchen Mocking-Infrastruktur und sind High-Effort/Low-Yield.
+
+**Aufwand:** mittel (~1 Tag für ~30 sinnvolle Tests).
+**Nutzen:** Hoch (langfristig) — schützt vor Regressionen bei jeder
+zukünftigen Änderung. Macht Refactoring entspannter.
+
+---
+
+## 8. Drive-Service Lazy-Init mit Auto-Reauth
+
+**Status:** offen
+**Priorität:** niedrig–mittel
+**Risiko:** **größerer Architektur-Eingriff**
+
+`service = get_google_service()` läuft beim **Modul-Import** in
+`src/google_drive.py:117`. Konsequenzen:
+
+1. Wenn Google bei Container-Start für 30 Sekunden hängt, crasht der
+   Container sofort. Mit `restart: unless-stopped` → Restart-Loop.
+2. Das Service-Objekt wird **nie** neu erzeugt. Bei Token-Revoke,
+   Schlüsselrotation, oder Auth-Refresh-Bugs bricht der gesamte Upload-Pfad
+   weg, bis du den Container manuell neu startest.
+
+**Vorschlag:**
+- `service` aus dem Modul-Scope entfernen.
+- Privater Getter `_get_service()` mit Lazy-Init und Caching.
+- Bei `HttpError` mit Status `401`/`403` Service-Cache invalidieren und
+  einmal neu auth'en (innerhalb des bestehenden Retry-Loops in
+  `upload_to_google_drive`).
+- Initial-Auth beim Container-Start mit Retry (z.B. 3 × 30s Backoff)
+  bevor man aufgibt.
+
+**WICHTIG / Risiko:** Berührt jeden Aufruf von `service.files().*` (mehrere
+Dutzend Stellen). Folder-Cache, Cleanup-Job, Upload — alles muss umgestellt
+werden. Hohes Regressions-Risiko ohne Tests (siehe Punkt 7).
+
+**Aufwand:** mittel-hoch.
+**Nutzen:** Hoch — verhindert die häufigste "Warum läuft das nicht?"-
+Ursache, die im Langzeitbetrieb auftritt.
+
+**Empfehlung:** Erst nach Punkt 7 (Tests) angehen, damit man Regressionen
+bemerkt.
+
+---
+
+## 9. Memory-Streaming statt Bytes-Buffer
+
+**Status:** offen
+**Priorität:** niedrig–mittel
+**Risiko:** **größerer Architektur-Eingriff**
+
+In `download_video_with_retry()` wird der gesamte Clip in einer Bytes-
+Variable gehalten:
+
+```python
+fh = tempfile.TemporaryFile()
+# ...write chunks...
+fh.seek(0)
+data = fh.read()  # ← KOMPLETTER Clip jetzt im RAM
+return data, None
+```
+
+Anschließend:
+```python
+media = MediaIoBaseUpload(io.BytesIO(video_data), ...)  # ← ZWEITE Kopie im RAM
+```
+
+Bei einem 4 GB-Clip = bis zu **8 GB Python-RAM** während des Uploads. Auf
+LXC-Containern mit 1–2 GB RAM ist das ein OOM-Kill-Garant. Mit
+`MAX_CLIP_SIZE=5GB` potenziell sogar 10 GB Spike.
+
+**Vorschlag:** `download_video_with_retry()` gibt statt `bytes` ein
+File-Handle (oder Pfad zur Temp-Datei) zurück, das direkt an
+`MediaIoBaseUpload(fh, resumable=True, chunksize=...)` geht. Die Drive-API
+liest dann chunked von der Disk → RAM-Footprint bleibt bei ~10 MB.
+
+**WICHTIG / Risiko:** Berührt die komplette Download/Upload-Pipeline,
+inkl. Error-Handling, Retry-Logik, Lifecycle des Temp-File-Handles.
+Edge-Cases: was passiert mit dem Handle, wenn Upload fehlschlägt und
+nochmal retry'd wird? Wer schließt das File? Memory-Map vs. Streaming?
+
+**Aufwand:** mittel-hoch.
+**Nutzen:** Sehr hoch — eliminiert OOM-Risiko bei großen Clips, der
+einzige reale Show-Stopper im Memory-Bereich.
+
+**Empfehlung:** Erst nach Punkt 7 (Tests) angehen.
+
+---
+
+## 10. `fetch_all_events` als Generator (Streaming)
+
+**Status:** offen
+**Priorität:** niedrig
+
+`fetch_all_events()` in `src/frigate_api.py` lädt aktuell ALLE Events
+in eine Python-Liste. Bei 24.000+ Events kann das viel Memory fressen.
+
+**Vorschlag:** Funktion in Generator umwandeln (`yield` statt
+`all_events.append()`), damit Events als Stream verarbeitet werden
+und der Memory-Footprint konstant bleibt.
+
+**Aufwand:** klein (nur `return all_events` → `yield event` pro Batch).
+
+**Nutzen:** konstanter Memory-Verbrauch, unabhängig von Event-Anzahl.
+
+---
+
+## 11. Threading / Parallel-Uploads (mit SQLite-Warnung)
 
 **Status:** offen
 **Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
