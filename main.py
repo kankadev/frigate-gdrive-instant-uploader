@@ -319,6 +319,58 @@ def handle_single_event(event_data, skip_wait=False, online=None):
     return True
 
 
+# --- Edge-triggered Frigate-reachability notifications -----------------------
+# Module-level state to avoid spamming Mattermost while Frigate stays down.
+# A notification is sent ONCE when Frigate transitions reachable -> unreachable
+# and ONCE when it recovers. While the state is unchanged, no notification.
+_frigate_unreachable_since = None  # datetime when the outage was first detected
+
+
+def _format_duration(seconds):
+    """Format a duration in seconds into a compact 'XhYmZs' string."""
+    seconds = max(0, int(seconds))
+    if seconds >= 3600:
+        return f"{seconds // 3600}h {seconds % 3600 // 60}m {seconds % 60}s"
+    if seconds >= 60:
+        return f"{seconds // 60}m {seconds % 60}s"
+    return f"{seconds}s"
+
+
+def _notify_frigate_unreachable_once():
+    """Idempotent: sends a Mattermost warning only on the first detected outage."""
+    global _frigate_unreachable_since
+    if _frigate_unreachable_since is not None:
+        return  # already notified for this outage
+    _frigate_unreachable_since = datetime.now()
+    ts = _frigate_unreachable_since.strftime('%Y-%m-%d %H:%M:%S')
+    send_mattermost_notification(
+        title=":warning: Frigate nicht erreichbar",
+        text=(
+            f"Frigate ist seit **{ts}** (Container-Zeit) nicht erreichbar.\n\n"
+            f"Uploads werden pausiert, bis Frigate wieder antwortet. "
+            f"Du erhältst eine zweite Nachricht, sobald die Verbindung wiederhergestellt ist."
+        ),
+        color="#ffae42",
+    )
+
+
+def _notify_frigate_recovered_once():
+    """Idempotent: sends a Mattermost OK only if we had previously notified about an outage."""
+    global _frigate_unreachable_since
+    if _frigate_unreachable_since is None:
+        return  # nothing to recover from
+    downtime_str = _format_duration((datetime.now() - _frigate_unreachable_since).total_seconds())
+    _frigate_unreachable_since = None
+    send_mattermost_notification(
+        title=":white_check_mark: Frigate wieder erreichbar",
+        text=(
+            f"Frigate antwortet wieder. Downtime: **{downtime_str}**.\n\n"
+            f"Pending Events werden im nächsten Job-Lauf abgearbeitet."
+        ),
+        color="#36a64f",
+    )
+
+
 def handle_all_events():
     logging.info("=== handle_all_events started ===")
 
@@ -335,8 +387,11 @@ def handle_all_events():
     # Skipping early keeps logs clean and the job slot free.
     if not check_frigate_reachable(FRIGATE_URL):
         logging.warning("Frigate not reachable at handle_all_events start. Skipping job.")
+        _notify_frigate_unreachable_once()
         logging.info("=== handle_all_events completed (skipped, Frigate unreachable) ===")
         return
+    # Frigate is reachable; if we previously notified about an outage, send recovery.
+    _notify_frigate_recovered_once()
 
     latest_start_time = database.get_latest_event_start_time()
     logging.debug(f"Fetching all events from Frigate since {latest_start_time}...")
@@ -423,8 +478,11 @@ def handle_not_uploaded_events():
     # check inside the loop still protects against transient busy moments.
     if not check_frigate_reachable(FRIGATE_URL):
         logging.warning("Frigate not reachable at handle_not_uploaded_events start. Skipping retry loop.")
+        _notify_frigate_unreachable_once()
         logging.info("=== handle_not_uploaded_events completed (skipped, Frigate unreachable) ===")
         return
+    # Frigate is reachable; if we previously notified about an outage, send recovery.
+    _notify_frigate_recovered_once()
 
     event_ids = database.select_not_uploaded_yet()
     if not event_ids:
