@@ -95,6 +95,9 @@ All configuration is read from `.env` (use `env_example` as template).
 | `SKIP_EVENTS_LONGER_THAN_SECONDS` | `0` | Skip events whose duration (`end_time - start_time`) exceeds this. Complements `MAX_CLIP_SIZE` for long-but-small clips and avoids Frigate clip-assembly hangs. `0` = off. Example: `14400` = 4h. |
 | `HEALTH_REPORT_TIME` | `09:00` | Time of day (24h `HH:MM`, container timezone) to send the Daily Health Report. Invalid values fall back to `09:00`. |
 | `HEALTH_REPORT_ONLY_ON_ISSUES` | `false` | When `true`, OK reports are only logged (INFO), not sent to Mattermost. WARNING / CRITICAL reports are always sent. |
+| `HEALTHCHECK_BIND` | `0.0.0.0` | Interface the in-process healthcheck HTTP server binds to. Use `127.0.0.1` to restrict to the container's loopback. |
+| `HEALTHCHECK_PORT` | `8080` | Port the healthcheck server listens on. The Docker `HEALTHCHECK` directive in the Dockerfile honours the same env var. |
+| `HEALTHCHECK_TOKEN` | – | Optional bearer token guarding `/status`. `/health` is always unauthenticated so Docker's `HEALTHCHECK` probe can reach it. |
 | `GDRIVE_RETENTION_DAYS` | `0` | Delete physical files in Drive older than this many days (`0` = off) |
 | `MATTERMOST_WEBHOOK_URL` | – | Optional. Enables error alerts and the Daily Health Report |
 | `MATTERMOST_PREFIX` | – | Optional. String prepended to every Mattermost message |
@@ -123,6 +126,81 @@ The CRITICAL message includes copy-paste-ready debug commands.
 To trigger the report on demand:
 ```bash
 docker exec -it frigate-gdrive-instant-uploader python -c "from main import daily_health_report; daily_health_report()"
+```
+
+# Healthcheck HTTP API
+
+A lightweight HTTP server runs in-process and exposes two endpoints. The
+Dockerfile contains a `HEALTHCHECK` directive that probes `/health` from
+inside the container, so external port exposure is **optional**.
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /health` | none | Liveness probe. `200 OK` if DB and scheduler are up, `503` otherwise. MQTT disconnects do not flunk this — the periodic job is the safety net. |
+| `GET /status` | optional bearer token | Detailed JSON: aggregate counts, error-kind breakdown, subsystem state. No sensitive data (no event IDs, no paths, no URLs). |
+
+## Configure
+
+```bash
+HEALTHCHECK_BIND=0.0.0.0       # default; use 127.0.0.1 to restrict
+HEALTHCHECK_PORT=8080
+HEALTHCHECK_TOKEN=             # leave empty to disable auth on /status
+```
+
+## Probe from inside the container
+
+```bash
+docker exec frigate-gdrive-instant-uploader \
+    python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health').read().decode())"
+```
+
+## Probe from outside (optional)
+
+Add a port mapping to `docker-compose.yml`:
+
+```yaml
+services:
+  frigate-gdrive-instant-uploader:
+    ports:
+      - "8080:8080"
+```
+
+Then:
+
+```bash
+curl http://your-host:8080/health
+curl -H "Authorization: Bearer $HEALTHCHECK_TOKEN" http://your-host:8080/status
+```
+
+## Sample responses
+
+`/health` (healthy):
+```json
+{"status":"ok","checks":{"db":"ok","scheduler":"ok","mqtt":"ok"}}
+```
+
+`/health` (unhealthy — DB unreachable):
+```json
+{"status":"unhealthy","checks":{"db":"fail","scheduler":"ok","mqtt":"ok","db_reason":"db_unreachable"}}
+```
+
+`/status`:
+```json
+{
+  "status": "ok",
+  "subsystems": {"db": true, "scheduler": true, "mqtt": true},
+  "stats": {
+    "uploaded_last_24h": 42,
+    "pending_total": 3,
+    "pending_lt_1d": 3,
+    "pending_1d_2d": 0,
+    "pending_2d_3d": 0,
+    "pending_gt_3d": 0,
+    "oldest_pending_age_days": 0.4,
+    "total_uploaded": 12873,
+    "pending_error_kinds": [{"kind": "frigate_download_truncated", "count": 2}]
+  }
+}
 ```
 
 # Troubleshooting

@@ -4,39 +4,7 @@ Sammlung von Verbesserungen, die das Tool stabiler, schneller oder
 ressourcen-schonender machen würden. Reihenfolge nach geplanter
 Umsetzungsreihenfolge (oben = als nächstes dran).
 
-## 1. Healthcheck-Endpoint
-
-**Status:** offen
-**Priorität:** **höchste — als nächstes umsetzen**
-
-Aktuell gibt es keine Möglichkeit, von außen zu prüfen, ob der Service noch
-ordnungsgemäß läuft. Logs zu lesen ist Workaround. Für Docker / Portainer /
-Watchtower / Kubernetes ist ein HTTP-Healthcheck Standard und würde aus dem
-Tool ein "production-grade"-Service machen.
-
-**Vorschlag:** Kleiner HTTP-Server (Flask/FastAPI/sogar `http.server` reicht)
-auf konfigurierbarem Port (Default `8080`):
-
-- `GET /health` → `200 OK` wenn:
-  - DB erreichbar (`SELECT 1` geht durch)
-  - Scheduler läuft (`scheduler.running == True`)
-  - MQTT-Client verbunden (`mqtt_client.is_connected()`)
-  - Drive-Service initialisiert
-- `GET /status` (optional) → JSON mit aktuellen Stats (pending, uploaded_24h,
-  last_error_kind-Aufschlüsselung) — im Prinzip die Health-Stats als JSON.
-
-`Dockerfile` bekommt eine `HEALTHCHECK`-Direktive, `docker-compose.yml`
-exposet den Port. README dokumentiert die Endpoints.
-
-**Aufwand:** klein (~50–80 LOC + Dockerfile/Compose-Anpassung).
-
-**Nutzen:** Hoch — Container-Orchestrators sehen sofort, ob's grün ist.
-Watchtower / Auto-Restart können auf Failures reagieren. Du selbst kannst
-einen Grafana-Stat-Panel oder Uptime-Kuma dranhängen.
-
----
-
-## 2. MQTT `on_message` in separaten Thread auslagern
+## 1. MQTT `on_message` in separaten Thread auslagern
 
 **Status:** offen
 **Priorität:** hoch
@@ -64,7 +32,7 @@ threading.Thread(
 Das lässt `on_message` sofort zurückkehren. Der MQTT-Loop kann weiter pingen
 und neue Events empfangen.
 
-**Abhängigkeit:** Punkt 11 (Threading / Parallel-Uploads) — die gleichen
+**Abhängigkeit:** Punkt 10 (Threading / Parallel-Uploads) — die gleichen
 SQLite-Concurrency-Probleme gelten hier. WAL-Mode hilft, aber Connection-Sharing
 zwischen Threads kann trotzdem zu `database is locked` führen.
 
@@ -74,7 +42,7 @@ verspätet.
 
 ---
 
-## 3. Drive-Folder-Cache invalidieren bei 404
+## 2. Drive-Folder-Cache invalidieren bei 404
 
 **Status:** offen
 **Priorität:** mittel-hoch
@@ -98,7 +66,7 @@ schlagen fehl bis Neustart".
 
 ---
 
-## 4. Konfigurations-Validierung beim Start
+## 3. Konfigurations-Validierung beim Start
 
 **Status:** offen
 **Priorität:** mittel
@@ -130,7 +98,7 @@ Debugging massiv. Spart langfristig viele Stunden Frustration.
 
 ---
 
-## 5. Daily Health Report mit Retry bei Mattermost-Failure
+## 4. Daily Health Report mit Retry bei Mattermost-Failure
 
 **Status:** offen
 **Priorität:** mittel
@@ -155,7 +123,7 @@ silently versagt, weißt du nicht, dass du nichts weißt.
 
 ---
 
-## 6. Graceful Shutdown bei SIGTERM/SIGINT
+## 5. Graceful Shutdown bei SIGTERM/SIGINT
 
 **Status:** offen
 **Priorität:** mittel
@@ -186,7 +154,7 @@ Verhindert Orphan-Uploads und inkonsistente DB-States.
 
 ---
 
-## 7. Tests für Parser, DB-Layer und Helpers
+## 6. Tests für Parser, DB-Layer und Helpers
 
 **Status:** offen
 **Priorität:** mittel (langfristig hoch)
@@ -224,7 +192,7 @@ zukünftigen Änderung. Macht Refactoring entspannter.
 
 ---
 
-## 8. Drive-Service Lazy-Init mit Auto-Reauth
+## 7. Drive-Service Lazy-Init mit Auto-Reauth
 
 **Status:** offen
 **Priorität:** niedrig–mittel
@@ -256,12 +224,12 @@ werden. Hohes Regressions-Risiko ohne Tests (siehe Punkt 7).
 **Nutzen:** Hoch — verhindert die häufigste "Warum läuft das nicht?"-
 Ursache, die im Langzeitbetrieb auftritt.
 
-**Empfehlung:** Erst nach Punkt 7 (Tests) angehen, damit man Regressionen
+**Empfehlung:** Erst nach Punkt 6 (Tests) angehen, damit man Regressionen
 bemerkt.
 
 ---
 
-## 9. Memory-Streaming statt Bytes-Buffer
+## 8. Memory-Streaming statt Bytes-Buffer
 
 **Status:** offen
 **Priorität:** niedrig–mittel
@@ -301,11 +269,11 @@ nochmal retry'd wird? Wer schließt das File? Memory-Map vs. Streaming?
 **Nutzen:** Sehr hoch — eliminiert OOM-Risiko bei großen Clips, der
 einzige reale Show-Stopper im Memory-Bereich.
 
-**Empfehlung:** Erst nach Punkt 7 (Tests) angehen.
+**Empfehlung:** Erst nach Punkt 6 (Tests) angehen.
 
 ---
 
-## 10. `fetch_all_events` als Generator (Streaming)
+## 9. `fetch_all_events` als Generator (Streaming)
 
 **Status:** offen
 **Priorität:** niedrig
@@ -323,7 +291,7 @@ und der Memory-Footprint konstant bleibt.
 
 ---
 
-## 11. Threading / Parallel-Uploads (mit SQLite-Warnung)
+## 10. Threading / Parallel-Uploads (mit SQLite-Warnung)
 
 **Status:** offen
 **Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
@@ -372,7 +340,8 @@ Voraussetzungen erfüllt sein:
 - [x] **Mattermost-Benachrichtigung bei Aufgabe:** Event-Details, Kamera, Label, direkte Clip/Snapshot-URLs
 - [x] **Download-Progress-Logging:** INFO-Level alle 50MB für Diagnose von Freeze-Punkten
 - [x] **ChunkedEncodingError-Diagnose:** README-Doku für "korrupte Frigate-Segmente" hinzugefügt
-- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 2 oben)
+- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 1 oben)
+- [x] **Healthcheck-HTTP-API mit `/health` und `/status`:** Stdlib-only `ThreadingHTTPServer` (keine neue Dependency), bind via `HEALTHCHECK_BIND` (default `0.0.0.0`) auf `HEALTHCHECK_PORT` (default `8080`). `/health` ist unauthenticated (Docker-`HEALTHCHECK`-Probe), liefert `200` wenn DB + Scheduler ok, `503` wenn nicht oder während Shutdown — MQTT-Disconnects flunken bewusst NICHT (periodischer Job ist das Sicherheitsnetz). `/status` liefert detailliertes JSON mit Stats und Error-Kind-Aufschlüsselung, optional via `HEALTHCHECK_TOKEN` mit Bearer-Token gesichert (constant-time-Vergleich via `hmac.compare_digest`). Sicherheitshärtung: Methoden-Whitelist (nur GET/HEAD), Security-Header (`X-Content-Type-Options`, `X-Frame-Options`, `Cache-Control: no-store`), Access-Logs unterdrückt, keine sensiblen Daten im Body (keine Pfade, URLs, Webhooks, Event-IDs). `Dockerfile` bekommt `HEALTHCHECK`-Direktive (probt `127.0.0.1` via stdlib `urllib`, kein curl-Dep). Verifikation: 14 isolierte Tests für Happy-Path, Subsystem-Failures, Auth-Wrong/Right/Open, HEAD/POST/404, Security-Header.
 - [x] **`SKIP_EVENTS_LONGER_THAN_SECONDS` Dauer-Filter:** Neue Env-Variable (Default `0` = off, Wert in Sekunden). Greift in `handle_single_event` direkt nach dem DB-Insert und bevor irgendein Frigate-Clip-Roundtrip stattfindet — also auch im MQTT-Pfad ohne zusätzliche API-Calls. Komplementär zu `MAX_CLIP_SIZE`: fängt Events ab, die zwar klein, aber sehr lang sind (z.B. 5h Low-Bitrate-Crop, 1.5 GB). Event wird via `update_event_retry(0, last_error_kind=ERR_EVENT_TOO_LONG)` non-retriable markiert, Metadaten bleiben in der DB.
 - [x] **`MAX_CLIP_SIZE` mit Pre-flight HEAD-Check und Streaming-Abort:** Env-Variable `MAX_CLIP_SIZE` (human-readable: `5GB`, `500MB`, `0`/leer = off). `_parse_max_clip_size()` mit Regex. Vor Download: HEAD-Request auf die Clip-URL, bei `Content-Length > Limit` sofort `ClipTooLargeError`. Falls HEAD nicht unterstützt: während des Streamings zählen und bei Überschreitung abbrechen. Event wird via `update_event_retry(0, last_error_kind=ERR_CLIP_TOO_LARGE)` als non-retriable markiert, Metadaten bleiben in der DB erhalten.
 - [x] **Strukturierte Fehlerstatistiken in der DB:** Neue Spalte `last_error_kind` (Migration 4) mit coarse-grained Kategorien (`frigate_download_timeout`, `frigate_download_5xx`, `frigate_download_truncated`, `frigate_download_empty`, `clip_too_large`, `drive_5xx`, `drive_http`, `drive_network`, `drive_other`). `upload_to_google_drive()` und `download_video_with_retry()` liefern jetzt `(result, error_kind)`-Tuples. `database.update_event()` / `update_event_retry()` akzeptieren `last_error_kind`. Bei Erfolg wird die Spalte auf NULL zurückgesetzt. Daily Health Report zeigt Aufschlüsselung der wartenden Events nach Fehler-Kategorie.
