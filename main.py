@@ -167,7 +167,7 @@ def handle_single_event(event_data, skip_wait=False):
     start_time = event_data['start_time']
     recorded_at = format_event_recorded_at(start_time)
     event_max_retries = get_max_retries_for_event(event_data)
-    duration_sec = int(end_time - start_time)
+    duration_sec = int((end_time or 0) - start_time)
 
     if not database.is_event_exists(event_id):
         database.insert_event(event_id, start_time)
