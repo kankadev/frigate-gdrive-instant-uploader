@@ -56,3 +56,8 @@ MATTERMOST_PREFIX="[my message prefix]"
 # Optional: Time of day for the Daily Health Report (24h format HH:MM, container
 # timezone — see TZ above). Default: 09:00. Invalid values fall back to 09:00.
 HEALTH_REPORT_TIME=09:00
+
+# Optional: When `true`, the Daily Health Report only posts to Mattermost when
+# there is a WARNING or CRITICAL condition. OK-reports are silently logged
+# instead. Default: false (always post). Accepts true/false, yes/no, 1/0, on/off.
+HEALTH_REPORT_ONLY_ON_ISSUES=false
