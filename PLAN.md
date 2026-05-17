@@ -126,7 +126,35 @@ Durchsatz bei Backlogs.
 
 ---
 
-## 8. `fetch_all_events` als Generator (Streaming)
+## 8. Maximale Clip-Größe überspringen (`MAX_CLIP_SIZE`)
+
+**Status:** offen
+**Priorität:** mittel
+
+Einige Clips werden riesig (z.B. 10 GB bei 14h-Events). Auch wenn Frigate sie
+korrekt assembliert, dauert der Upload ewig und blockiert die Queue. Wenn der
+User sowieso keine 10-GB-Videos in Google Drive will, sollten wir sie direkt
+ablehnen.
+
+**Vorschlag:** Env-Variable `MAX_CLIP_SIZE` mit human-readable Parser:
+- `MAX_CLIP_SIZE=5GB` → überspringe Clips > 5 GB
+- `MAX_CLIP_SIZE=500MB` → überspringe Clips > 500 MB
+- `MAX_CLIP_SIZE=0` oder leer → keine Begrenzung (Default)
+
+**Implementierung:**
+1. Vor Download: `HEAD` Request auf Clip-URL oder `Content-Length` aus erstem
+   `GET`-Chunk lesen.
+2. Wenn bekannt und > Limit → sofort `retry=0` mit Log:
+   `Skipping X GB clip for {event_id}, exceeds MAX_CLIP_SIZE=5GB`
+3. Wenn unbekannt (Streaming) → während Download prüfen und abbrechen.
+
+**Aufwand:** klein.
+**Nutzen:** 10-GB-Monster-Events werden in 1 Sekunde abgelehnt statt
+10 Minuten heruntergeladen zu werden.
+
+---
+
+## 9. `fetch_all_events` als Generator (Streaming)
 
 **Status:** offen
 **Priorität:** niedrig
@@ -144,7 +172,7 @@ und der Memory-Footprint konstant bleibt.
 
 ---
 
-## 9. MQTT `on_message` in separaten Thread auslagern
+## 10. MQTT `on_message` in separaten Thread auslagern
 
 **Status:** offen
 **Priorität:** hoch
@@ -172,7 +200,7 @@ threading.Thread(
 Das lässt `on_message` sofort zurückkehren. Der MQTT-Loop kann weiter pingen
 und neue Events empfangen.
 
-**Abhängigkeit:** Punkt 10 (Threading / Parallel-Uploads) — die gleichen
+**Abhängigkeit:** Punkt 11 (Threading / Parallel-Uploads) — die gleichen
 SQLite-Concurrency-Probleme gelten hier. WAL-Mode hilft, aber Connection-Sharing
 zwischen Threads kann trotzdem zu `database is locked` führen.
 
@@ -182,7 +210,7 @@ verspätet.
 
 ---
 
-## 10. Threading / Parallel-Uploads (mit SQLite-Warnung)
+## 11. Threading / Parallel-Uploads (mit SQLite-Warnung)
 
 **Status:** offen
 **Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
