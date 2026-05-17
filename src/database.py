@@ -132,22 +132,37 @@ def insert_event(event_id, start_time, db_path=DB_PATH):
         conn.close()
 
 
-def update_event(event_id, uploaded, retry=None, db_path=DB_PATH):
+def update_event(event_id, uploaded, retry=None, last_error_kind=None, db_path=DB_PATH):
     """
-    Updates an event in the database.
-    :param event_id:
-    :param uploaded:
-    :param retry:
-    :param db_path:
-    :return:
+    Updates an event in the database. Increments tries by 1.
+
+    :param event_id: event id
+    :param uploaded: 1 on success, 0 on failure
+    :param retry: optional new retry flag (None = keep existing)
+    :param last_error_kind: optional coarse-grained error category for the failed
+        attempt (e.g. 'drive_5xx'). On a successful upload (uploaded=1) the column
+        is unconditionally cleared back to NULL so the daily health report only
+        reflects events that are currently failing. On a failed upload (uploaded=0)
+        the kind is only written when provided; pass None to leave it as-is.
     """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+    # Build the SET clause dynamically so we don't accidentally overwrite
+    # last_error_kind when the caller didn't supply one for a failure.
+    set_parts = ["uploaded = ?", "tries = tries + 1"]
+    params = [uploaded]
     if retry is not None:
-        cursor.execute('UPDATE events SET uploaded = ?, retry = ?, tries = tries + 1 WHERE event_id = ?',
-                       (uploaded, retry, event_id))
-    else:
-        cursor.execute('UPDATE events SET uploaded = ?, tries = tries + 1 WHERE event_id = ?', (uploaded, event_id))
+        set_parts.append("retry = ?")
+        params.append(retry)
+    if uploaded == 1:
+        # Successful upload always clears the last error kind.
+        set_parts.append("last_error_kind = NULL")
+    elif last_error_kind is not None:
+        set_parts.append("last_error_kind = ?")
+        params.append(last_error_kind)
+    params.append(event_id)
+    sql = f"UPDATE events SET {', '.join(set_parts)} WHERE event_id = ?"
+    cursor.execute(sql, params)
     conn.commit()
     conn.close()
 
@@ -167,18 +182,22 @@ def select_retry(event_id, db_path=DB_PATH):
     return result[0] if result else None
 
 
-def update_event_retry(event_id, retry, db_path=DB_PATH):
+def update_event_retry(event_id, retry, last_error_kind=None, db_path=DB_PATH):
     """
-    Updates the retry status of an event in the database.
-    :param event_id:
-    :param retry:
-    :param db_path:
-    :return:
+    Updates the retry status of an event in the database. Optionally records a
+    coarse-grained error category at the same time (used when marking an event
+    non-retriable, e.g. ClipTooLarge or after MAX_RETRY_ATTEMPTS).
     """
     conn = sqlite3.connect(db_path)
     try:
         cursor = conn.cursor()
-        cursor.execute('UPDATE events SET retry = ? WHERE event_id = ?', (retry, event_id))
+        if last_error_kind is not None:
+            cursor.execute(
+                'UPDATE events SET retry = ?, last_error_kind = ? WHERE event_id = ?',
+                (retry, last_error_kind, event_id),
+            )
+        else:
+            cursor.execute('UPDATE events SET retry = ? WHERE event_id = ?', (retry, event_id))
         conn.commit()
     except Exception as e:
         logging.error(f"Error updating event retry status: {e}")
@@ -327,6 +346,9 @@ def get_health_stats(db_path=DB_PATH):
         "oldest_pending_age_days": None,
         "oldest_pending_event_id": None,
         "total_uploaded": 0,
+        # List of (kind, count) tuples, sorted desc by count. Includes only
+        # pending events (uploaded=0) with a recorded last_error_kind.
+        "pending_error_kinds": [],
     }
     conn = sqlite3.connect(db_path)
     try:
@@ -373,6 +395,13 @@ def get_health_stats(db_path=DB_PATH):
         if row:
             stats["oldest_pending_event_id"] = row[0]
             stats["oldest_pending_age_days"] = round(row[1], 1)
+
+        cursor.execute(
+            "SELECT last_error_kind, COUNT(*) FROM events "
+            "WHERE uploaded = 0 AND last_error_kind IS NOT NULL "
+            "GROUP BY last_error_kind ORDER BY COUNT(*) DESC"
+        )
+        stats["pending_error_kinds"] = [(row[0], row[1]) for row in cursor.fetchall()]
     except Exception as e:
         logging.error(f"Error collecting health stats: {e}")
     finally:
