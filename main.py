@@ -71,7 +71,7 @@ import paho.mqtt.client as mqtt
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from src import database, google_drive
-from src.frigate_api import fetch_all_events, fetch_event, check_frigate_reachable, EventNotFoundError, ClipNotAvailableError, FrigateUnreachableError
+from src.frigate_api import fetch_all_events, fetch_event, check_frigate_reachable, EventNotFoundError, ClipNotAvailableError, ClipTooLargeError, FrigateUnreachableError
 from src.google_drive import cleanup_old_files_on_drive, service
 from src.mattermost_handler import MattermostHandler, send_mattermost_notification
 
@@ -191,6 +191,13 @@ def handle_single_event(event_data, skip_wait=False):
                         f"Removing from database. Reason: {e}"
                     )
                     database.delete_event(event_id)
+                    return
+                except ClipTooLargeError as e:
+                    logging.warning(
+                        f"Skipping clip for event {event_id} (recorded {recorded_at}). "
+                        f"Reason: {e} Marking as non-retriable."
+                    )
+                    database.update_event_retry(event_id, 0)
                     return
                 if success:
                     logging.info(f"Video {event_id} (recorded {recorded_at}) successfully uploaded.")

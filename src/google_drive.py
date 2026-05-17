@@ -19,7 +19,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from src import database
-from src.frigate_api import generate_video_url, ClipNotAvailableError
+from src.frigate_api import generate_video_url, ClipNotAvailableError, ClipTooLargeError
 
 load_dotenv()
 
@@ -29,6 +29,7 @@ load_dotenv()
 upload_lock = threading.Lock()
 
 GDRIVE_RETENTION_DAYS = int(os.getenv('GDRIVE_RETENTION_DAYS', 0))
+MAX_CLIP_SIZE_RAW = os.getenv('MAX_CLIP_SIZE', '')
 
 UPLOAD_DIR = os.getenv('UPLOAD_DIR')
 # Prioritize standard 'TZ' env var, but fall back to 'TIMEZONE' for backward compatibility.
@@ -44,6 +45,30 @@ UPLOAD_CHUNK_SIZE = 1024 * 1024 * 10  # 10MB chunks for resumable uploads
 DOWNLOAD_TIMEOUT = (60, 600)  # (connect_timeout, read_timeout) — 10min read, enough for large clips without blocking queue
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
+
+
+def _parse_max_clip_size(value):
+    """Parse a human-readable size string (e.g. '5GB', '500MB', '0') into bytes."""
+    if not value:
+        return 0
+    value = value.strip().upper()
+    if value == '0':
+        return 0
+    import re
+    match = re.match(r'^(\d+(?:\.\d+)?)\s*(GB|MB|KB|B)?$', value)
+    if not match:
+        logging.warning(f"Invalid MAX_CLIP_SIZE value '{value}', disabling limit.")
+        return 0
+    num_str, unit = match.groups()
+    num = float(num_str)
+    multipliers = {'B': 1, 'KB': 1024, 'MB': 1024 ** 2, 'GB': 1024 ** 3}
+    multiplier = multipliers.get(unit, 1)
+    return int(num * multiplier)
+
+
+MAX_CLIP_SIZE_BYTES = _parse_max_clip_size(MAX_CLIP_SIZE_RAW)
+if MAX_CLIP_SIZE_BYTES > 0:
+    logging.info(f"MAX_CLIP_SIZE configured: {MAX_CLIP_SIZE_RAW} ({MAX_CLIP_SIZE_BYTES} bytes)")
 
 def get_google_service():
     """Initialize and return a Google Drive service."""
@@ -247,7 +272,7 @@ def exponential_backoff(retries):
 
 EMPTY_VIDEO_RETRY_DELAY = 10  # seconds to wait between retries when video is 0 bytes (Frigate still writing)
 
-def download_video_with_retry(video_url, event_id=None, max_retries=5):
+def download_video_with_retry(video_url, event_id=None, max_retries=5, max_size_bytes=0):
     """Download video with retry logic and proper timeout handling."""
     retry_count = 0
     last_error = None
@@ -292,6 +317,14 @@ def download_video_with_retry(video_url, event_id=None, max_retries=5):
                                 fh.write(chunk)
                                 total_bytes += len(chunk)
                                 bytes_this_attempt += len(chunk)
+                                # Abort if the clip exceeds the configured max size
+                                if max_size_bytes > 0 and total_bytes > max_size_bytes:
+                                    size_mb = total_bytes / (1024 * 1024)
+                                    limit_mb = max_size_bytes / (1024 * 1024)
+                                    raise ClipTooLargeError(
+                                        f"Clip for {event_id} exceeds MAX_CLIP_SIZE ({limit_mb:.1f} MB). "
+                                        f"Aborted at {size_mb:.1f} MB."
+                                    )
                                 # Log every 50 MB so we can see progress before timeouts
                                 if total_bytes - last_log_bytes >= 50 * 1024 * 1024:
                                     logging.info(f"Download progress for {event_id}: {total_bytes / (1024*1024):.1f} MB downloaded so far...")
@@ -310,6 +343,8 @@ def download_video_with_retry(video_url, event_id=None, max_retries=5):
                 logging.warning(f"Attempt {retry_count}/{max_retries} for {event_id}: Video still empty, Frigate may still be writing. "
                                 f"Retrying in {EMPTY_VIDEO_RETRY_DELAY}s...")
                 time.sleep(EMPTY_VIDEO_RETRY_DELAY)
+        except ClipTooLargeError:
+            raise
         except (requests.RequestException, ssl.SSLError, socket.timeout) as e:
             last_error = e
             # If we've already downloaded significant data and Frigate cut off the stream,
@@ -343,6 +378,25 @@ def upload_to_google_drive(event, frigate_url):
     year, month, day = filename.split("__")[0].split("-")[:3]
     video_url = generate_video_url(frigate_url, event_id)
 
+    # Pre-flight size check via HEAD request when possible
+    if MAX_CLIP_SIZE_BYTES > 0:
+        try:
+            head_resp = requests.head(video_url, timeout=30)
+            if head_resp.status_code == 200:
+                content_length = head_resp.headers.get('Content-Length')
+                if content_length:
+                    size = int(content_length)
+                    if size > MAX_CLIP_SIZE_BYTES:
+                        size_gb = size / (1024 ** 3)
+                        limit_gb = MAX_CLIP_SIZE_BYTES / (1024 ** 3)
+                        raise ClipTooLargeError(
+                            f"Clip for {event_id} is {size_gb:.2f} GB, exceeds MAX_CLIP_SIZE={limit_gb:.2f} GB. Skipping."
+                        )
+        except ClipTooLargeError:
+            raise
+        except requests.RequestException:
+            pass  # HEAD may not be supported, fall back to stream check
+
     with upload_lock:
         # Another thread may have uploaded this event while we were waiting for the lock.
         if database.select_event_uploaded(event_id) == 1:
@@ -368,7 +422,7 @@ def upload_to_google_drive(event, frigate_url):
                     raise Exception(f"Failed to find or create folder: {day}")
 
                 # 2. Download video with retry logic
-                video_data = download_video_with_retry(video_url, event_id=event_id)
+                video_data = download_video_with_retry(video_url, event_id=event_id, max_size_bytes=MAX_CLIP_SIZE_BYTES)
                 if not video_data:
                     raise Exception(f"Failed to download video from {video_url}")
 

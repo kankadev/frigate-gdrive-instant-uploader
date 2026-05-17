@@ -20,6 +20,11 @@ class ClipNotAvailableError(Exception):
     pass
 
 
+class ClipTooLargeError(Exception):
+    """Raised when a clip exceeds the configured MAX_CLIP_SIZE limit."""
+    pass
+
+
 def check_frigate_reachable(frigate_url, timeout=120):
     """
     Check if Frigate is reachable by hitting the /api/version endpoint.

@@ -23,6 +23,11 @@ DB_RETENTION_DAYS=30
 # in the DB until DB_RETENTION_DAYS deletes it. Default: 50.
 MAX_RETRY_ATTEMPTS=50
 
+# Optional: Maximum clip size to upload. Human-readable values like 5GB, 500MB.
+# Clips larger than this are skipped immediately (marked as non-retriable).
+# Set to 0 or leave empty to disable the limit.
+MAX_CLIP_SIZE=5GB
+
 # MQTT
 MQTT_BROKER_ADDRESS=192.168.0.59
 MQTT_TOPIC=frigate/events
