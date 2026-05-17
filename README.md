@@ -92,6 +92,7 @@ All configuration is read from `.env` (use `env_example` as template).
 | `DB_RETENTION_DAYS` | `30` | Delete SQLite rows older than this, regardless of upload status. Drive files unaffected |
 | `MAX_RETRY_ATTEMPTS` | `50` | Give up retrying a single event after this many failed attempts (≈8 h) |
 | `MAX_CLIP_SIZE` | – | Skip clips larger than this (e.g. `5GB`, `500MB`). `0` or empty = no limit. Marked as non-retriable. |
+| `HEALTH_REPORT_TIME` | `09:00` | Time of day (24h `HH:MM`, container timezone) to send the Daily Health Report. Invalid values fall back to `09:00`. |
 | `GDRIVE_RETENTION_DAYS` | `0` | Delete physical files in Drive older than this many days (`0` = off) |
 | `MATTERMOST_WEBHOOK_URL` | – | Optional. Enables error alerts and the Daily Health Report |
 | `MATTERMOST_PREFIX` | – | Optional. String prepended to every Mattermost message |
@@ -102,12 +103,12 @@ All configuration is read from `.env` (use `env_example` as template).
 |---|---|---|
 | Every 10 min | `run_every_x_minutes` | Clean up old DB rows, fetch missed events, retry failed uploads |
 | Every 6 h | `run_every_6_hours` | Log/notify about hard-failed events (legacy) |
-| Daily 09:00 | `daily_health_report` | Mattermost status report (OK / WARNING / CRITICAL) |
+| Daily, `HEALTH_REPORT_TIME` (default 09:00) | `daily_health_report` | Mattermost status report (OK / WARNING / CRITICAL) |
 | Daily | `cleanup_old_files_on_drive` | Delete Google Drive files older than `GDRIVE_RETENTION_DAYS` (skipped if `0`) |
 
 # Mattermost Health Report
 
-When `MATTERMOST_WEBHOOK_URL` is configured, a daily summary is posted at 09:00 (container timezone):
+When `MATTERMOST_WEBHOOK_URL` is configured, a daily summary is posted at `HEALTH_REPORT_TIME` (default `09:00`, container timezone):
 
 - :white_check_mark: **OK (green):** all uploads healthy
 - :warning: **WARNING (orange):** events pending for 1–3 days

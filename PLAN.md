@@ -3,20 +3,7 @@
 Sammlung von Verbesserungen, die das Tool stabiler, schneller oder
 ressourcen-schonender machen würden. Reihenfolge nach geschätztem Nutzen.
 
-## 1. Konfigurierbare Uhrzeit für Daily Health Report
-
-**Status:** offen
-**Priorität:** niedrig
-
-Aktuell fest auf 09:00 Container-Zeit gepinnt
-(`@/main.py: scheduler.add_job(daily_health_report, 'cron', hour=9, minute=0)`).
-
-**Vorschlag:** Env-Variable `HEALTH_REPORT_TIME=09:00` mit Default 09:00,
-geparst zu `hour`/`minute`.
-
----
-
-## 2. Optionale "Alles OK"-Stille-Modus
+## 1. Optionale "Alles OK"-Stille-Modus
 
 **Status:** offen
 **Priorität:** niedrig
@@ -30,7 +17,7 @@ nicht an Mattermost geschickt.
 
 ---
 
-## 3. Frigate-Reachability-Check vor dem Retry-Job
+## 2. Frigate-Reachability-Check vor dem Retry-Job
 
 **Status:** offen
 **Priorität:** mittel
@@ -47,7 +34,7 @@ mit `WARNING`-Log statt 400× Fehler.
 
 ---
 
-## 4. Strukturierte Fehlerstatistiken in der DB
+## 3. Strukturierte Fehlerstatistiken in der DB
 
 **Status:** offen
 **Priorität:** niedrig
@@ -62,7 +49,7 @@ Schritt es jeweils gescheitert ist (Download? Upload? Auth?).
 
 ---
 
-## 5. Maximale Event-Dauer für Uploads
+## 4. Maximale Event-Dauer für Uploads
 
 **Status:** offen
 **Priorität:** mittel
@@ -83,7 +70,7 @@ Durchsatz bei Backlogs.
 
 ---
 
-## 6. Maximale Clip-Größe überspringen (`MAX_CLIP_SIZE`)
+## 5. Maximale Clip-Größe überspringen (`MAX_CLIP_SIZE`)
 
 **Status:** offen
 **Priorität:** mittel
@@ -111,7 +98,7 @@ ablehnen.
 
 ---
 
-## 7. `fetch_all_events` als Generator (Streaming)
+## 6. `fetch_all_events` als Generator (Streaming)
 
 **Status:** offen
 **Priorität:** niedrig
@@ -129,7 +116,7 @@ und der Memory-Footprint konstant bleibt.
 
 ---
 
-## 8. MQTT `on_message` in separaten Thread auslagern
+## 7. MQTT `on_message` in separaten Thread auslagern
 
 **Status:** offen
 **Priorität:** hoch
@@ -157,7 +144,7 @@ threading.Thread(
 Das lässt `on_message` sofort zurückkehren. Der MQTT-Loop kann weiter pingen
 und neue Events empfangen.
 
-**Abhängigkeit:** Punkt 9 (Threading / Parallel-Uploads) — die gleichen
+**Abhängigkeit:** Punkt 8 (Threading / Parallel-Uploads) — die gleichen
 SQLite-Concurrency-Probleme gelten hier. WAL-Mode hilft, aber Connection-Sharing
 zwischen Threads kann trotzdem zu `database is locked` führen.
 
@@ -167,7 +154,7 @@ verspätet.
 
 ---
 
-## 9. Threading / Parallel-Uploads (mit SQLite-Warnung)
+## 8. Threading / Parallel-Uploads (mit SQLite-Warnung)
 
 **Status:** offen
 **Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
@@ -216,7 +203,8 @@ Voraussetzungen erfüllt sein:
 - [x] **Mattermost-Benachrichtigung bei Aufgabe:** Event-Details, Kamera, Label, direkte Clip/Snapshot-URLs
 - [x] **Download-Progress-Logging:** INFO-Level alle 50MB für Diagnose von Freeze-Punkten
 - [x] **ChunkedEncodingError-Diagnose:** README-Doku für "korrupte Frigate-Segmente" hinzugefügt
-- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 8 oben)
+- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 7 oben)
+- [x] **Konfigurierbare Uhrzeit für Daily Health Report:** Neue Env-Variable `HEALTH_REPORT_TIME` (Format `HH:MM`, Default `09:00`, Container-TZ). Invalide Werte fallen mit WARNING-Log auf `09:00` zurück.
 - [x] **Internet-Check 1× pro Job-Lauf statt pro Event:** `handle_not_uploaded_events()` und `handle_all_events()` rufen `internet()` einmal am Job-Anfang. `handle_single_event` akzeptiert `online`-Parameter (tri-state) und liefert `bool` zurück. Bei einem Upload-Fehler im Loop wird `internet()` neu geprüft und der Loop sauber abgebrochen, falls Konnektivität mittendrin verloren geht. Spart bei Internet-Outage bis zu 20 min an DNS-Timeouts pro 400-Event-Backlog.
 - [x] **Partial Indexes für Retry-Queue:** `idx_pending_retry` und `idx_pending_hard` (Migration 3) — `select_not_uploaded_yet[_hard]()` ohne Full-Table-Scan, ORDER BY `created` direkt aus dem Index
 - [x] **Download-Logs mit event_id:** Alle Progress/Complete/Abort-Messages enthalten jetzt die Event-ID für bessere Traceability bei parallelen Downloads
