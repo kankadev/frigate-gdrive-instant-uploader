@@ -52,7 +52,7 @@ def fetch_event(frigate_url, event_id, retries=2, timeout=120):
         except EventNotFoundError:
             raise
         except (ChunkedEncodingError, ConnectionError, Timeout, requests.HTTPError) as e:
-            logging.error(f"Attempt {attempt + 1} failed with error: {e}")
+            logging.warning(f"Attempt {attempt + 1} failed with error: {e}")
             if attempt < retries - 1:
                 sleep(2)
             else:
@@ -77,7 +77,7 @@ def fetch_all_events(frigate_url, after=None, batch_size=100, retries=2, timeout
                 response.raise_for_status()  # Raise an HTTPError for bad responses
                 break  # If the request was successful, exit the retry loop
             except (ChunkedEncodingError, ConnectionError) as e:
-                logging.error(f"Attempt {attempt + 1} failed with error: {e}")
+                logging.warning(f"Attempt {attempt + 1} failed with error: {e}")
                 if attempt < retries - 1:
                     sleep(2)  # Wait a bit before retrying
                 else:
