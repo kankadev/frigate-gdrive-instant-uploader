@@ -3,22 +3,7 @@
 Sammlung von Verbesserungen, die das Tool stabiler, schneller oder
 ressourcen-schonender machen würden. Reihenfolge nach geschätztem Nutzen.
 
-## 1. Strukturierte Fehlerstatistiken in der DB
-
-**Status:** offen
-**Priorität:** niedrig
-
-Aktuell wissen wir nur `tries` und `retry`. Wir wissen aber nicht, an welchem
-Schritt es jeweils gescheitert ist (Download? Upload? Auth?).
-
-**Vorschlag:** Spalte `last_error_kind` (z.B. `clip_400`, `frigate_5xx`,
-`drive_quota`, `network`). Hilft beim Daily-Report, gezielter zu warnen.
-
-**Aufwand:** mittel (Migration + Code-Anpassungen an mehreren Stellen).
-
----
-
-## 2. Maximale Event-Dauer für Uploads
+## 1. Maximale Event-Dauer für Uploads
 
 **Status:** offen
 **Priorität:** mittel
@@ -39,7 +24,7 @@ Durchsatz bei Backlogs.
 
 ---
 
-## 3. Maximale Clip-Größe überspringen (`MAX_CLIP_SIZE`)
+## 2. Maximale Clip-Größe überspringen (`MAX_CLIP_SIZE`)
 
 **Status:** offen
 **Priorität:** mittel
@@ -67,7 +52,7 @@ ablehnen.
 
 ---
 
-## 4. `fetch_all_events` als Generator (Streaming)
+## 3. `fetch_all_events` als Generator (Streaming)
 
 **Status:** offen
 **Priorität:** niedrig
@@ -85,7 +70,7 @@ und der Memory-Footprint konstant bleibt.
 
 ---
 
-## 5. MQTT `on_message` in separaten Thread auslagern
+## 4. MQTT `on_message` in separaten Thread auslagern
 
 **Status:** offen
 **Priorität:** hoch
@@ -113,7 +98,7 @@ threading.Thread(
 Das lässt `on_message` sofort zurückkehren. Der MQTT-Loop kann weiter pingen
 und neue Events empfangen.
 
-**Abhängigkeit:** Punkt 6 (Threading / Parallel-Uploads) — die gleichen
+**Abhängigkeit:** Punkt 5 (Threading / Parallel-Uploads) — die gleichen
 SQLite-Concurrency-Probleme gelten hier. WAL-Mode hilft, aber Connection-Sharing
 zwischen Threads kann trotzdem zu `database is locked` führen.
 
@@ -123,7 +108,7 @@ verspätet.
 
 ---
 
-## 6. Threading / Parallel-Uploads (mit SQLite-Warnung)
+## 5. Threading / Parallel-Uploads (mit SQLite-Warnung)
 
 **Status:** offen
 **Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
@@ -172,7 +157,8 @@ Voraussetzungen erfüllt sein:
 - [x] **Mattermost-Benachrichtigung bei Aufgabe:** Event-Details, Kamera, Label, direkte Clip/Snapshot-URLs
 - [x] **Download-Progress-Logging:** INFO-Level alle 50MB für Diagnose von Freeze-Punkten
 - [x] **ChunkedEncodingError-Diagnose:** README-Doku für "korrupte Frigate-Segmente" hinzugefügt
-- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 5 oben)
+- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 4 oben)
+- [x] **Strukturierte Fehlerstatistiken in der DB:** Neue Spalte `last_error_kind` (Migration 4) mit coarse-grained Kategorien (`frigate_download_timeout`, `frigate_download_5xx`, `frigate_download_truncated`, `frigate_download_empty`, `clip_too_large`, `drive_5xx`, `drive_http`, `drive_network`, `drive_other`). `upload_to_google_drive()` und `download_video_with_retry()` liefern jetzt `(result, error_kind)`-Tuples. `database.update_event()` / `update_event_retry()` akzeptieren `last_error_kind`. Bei Erfolg wird die Spalte auf NULL zurückgesetzt. Daily Health Report zeigt Aufschlüsselung der wartenden Events nach Fehler-Kategorie.
 - [x] **Edge-triggered Mattermost-Notifications bei Frigate-Outage:** State-Variable `_frigate_unreachable_since` + idempotente Helper `_notify_frigate_unreachable_once()` / `_notify_frigate_recovered_once()`. Maximal 2 Notifications pro Outage-Zyklus (Down + Recovery mit Downtime-Dauer), kein Spam bei längeren Ausfällen. Bewusst nicht für Internet-Outage (kein Webhook erreichbar). Container-Restart während Outage führt maximal zu 1 Duplikat-Notification.
 - [x] **Frigate-Reachability-Pre-Check pro Job-Lauf:** `handle_not_uploaded_events()` und `handle_all_events()` prüfen am Job-Anfang per `check_frigate_reachable()`, ob Frigate erreichbar ist. Default-Timeout der Funktion von 120s auf 10s reduziert (`/api/version` antwortet in Millisekunden, langer Timeout war historisch falsch). Bei Frigate-Outage wird der gesamte Job in 10s übersprungen statt bis zu 6 min Reachability-Timeouts zu durchlaufen. Der bestehende Per-Event-Check im Retry-Loop bleibt als Race-Schutz erhalten und profitiert ebenfalls vom kürzeren Timeout.
 - [x] **"Alles-OK"-Stille-Modus für Daily Health Report:** Neue Env-Variable `HEALTH_REPORT_ONLY_ON_ISSUES` (default `false`). Bei `true` werden OK-Reports nicht mehr an Mattermost geschickt, sondern nur als INFO-Log mit Kennzahlen festgehalten. WARNING und CRITICAL werden immer gesendet. Generischer `parse_bool_env()`-Helper akzeptiert true/false, yes/no, 1/0, on/off.

@@ -235,7 +235,7 @@ def handle_single_event(event_data, skip_wait=False, online=None):
                     time.sleep(5)
                 logging.info(f"Starting upload for event {event_id} (recorded {recorded_at})...")
                 try:
-                    success = google_drive.upload_to_google_drive(event_data, FRIGATE_URL)
+                    success, error_kind = google_drive.upload_to_google_drive(event_data, FRIGATE_URL)
                 except ClipNotAvailableError as e:
                     logging.warning(
                         f"Clip for event {event_id} (recorded {recorded_at}) no longer available on Frigate. "
@@ -248,13 +248,13 @@ def handle_single_event(event_data, skip_wait=False, online=None):
                         f"Skipping clip for event {event_id} (recorded {recorded_at}). "
                         f"Reason: {e} Marking as non-retriable."
                     )
-                    database.update_event_retry(event_id, 0)
+                    database.update_event_retry(event_id, 0, last_error_kind=google_drive.ERR_CLIP_TOO_LARGE)
                     return True
                 if success:
                     logging.info(f"Video {event_id} (recorded {recorded_at}) successfully uploaded.")
                     database.update_event(event_id, 1)
                 else:
-                    database.update_event(event_id, 0)
+                    database.update_event(event_id, 0, last_error_kind=error_kind)
                     tries = database.select_tries(event_id)
                     msg = (
                         f"Failed to upload video {event_id} (recorded {recorded_at}). "
@@ -271,7 +271,9 @@ def handle_single_event(event_data, skip_wait=False, online=None):
                             f"after {tries} failed attempts. Marked as non-retriable. "
                             f"No further upload attempts will be made for this event."
                         )
-                        database.update_event_retry(event_id, 0)
+                        # Preserve the most recent error category when permanently
+                        # marking the event non-retriable.
+                        database.update_event_retry(event_id, 0, last_error_kind=error_kind)
 
                         # Notify Mattermost with details so the user can grab the clip manually
                         if duration_sec >= 3600:
@@ -600,6 +602,14 @@ def daily_health_report():
         f"| Oldest pending event | {oldest} |\n"
         f"| Total uploaded ever | {stats['total_uploaded']} |\n"
     )
+
+    # Surface a breakdown of failure categories among pending events so the
+    # user can see at a glance whether the backlog is dominated by network
+    # issues, Frigate clip-assembly bugs, Drive quota errors, etc.
+    if stats.get("pending_error_kinds"):
+        text += "\n**Pending errors by category:**\n"
+        for kind, count in stats["pending_error_kinds"]:
+            text += f"- `{kind}`: **{count}**\n"
 
     if is_critical:
         text += (

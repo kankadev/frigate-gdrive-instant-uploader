@@ -47,6 +47,21 @@ DOWNLOAD_TIMEOUT = (60, 600)  # (connect_timeout, read_timeout) — 10min read, 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
 
+# --- Coarse-grained error categories for the daily health report -------------
+# Stored in the `last_error_kind` column. Keep these snake_case and source-prefixed.
+ERR_FRIGATE_DOWNLOAD_5XX = 'frigate_download_5xx'
+ERR_FRIGATE_DOWNLOAD_TIMEOUT = 'frigate_download_timeout'
+ERR_FRIGATE_DOWNLOAD_TRUNCATED = 'frigate_download_truncated'
+ERR_FRIGATE_DOWNLOAD_EMPTY = 'frigate_download_empty'
+ERR_FRIGATE_DOWNLOAD_OTHER = 'frigate_download_other'
+ERR_CLIP_TOO_LARGE = 'clip_too_large'
+ERR_DRIVE_5XX = 'drive_5xx'
+ERR_DRIVE_HTTP = 'drive_http'
+ERR_DRIVE_NETWORK = 'drive_network'
+ERR_DRIVE_OTHER = 'drive_other'
+ERR_UNKNOWN = 'unknown'
+
+
 def _parse_max_clip_size(value):
     """Parse a human-readable size string (e.g. '5GB', '500MB', '0') into bytes."""
     if not value:
@@ -273,9 +288,19 @@ def exponential_backoff(retries):
 EMPTY_VIDEO_RETRY_DELAY = 10  # seconds to wait between retries when video is 0 bytes (Frigate still writing)
 
 def download_video_with_retry(video_url, event_id=None, max_retries=5, max_size_bytes=0):
-    """Download video with retry logic and proper timeout handling."""
+    """
+    Download video with retry logic and proper timeout handling.
+
+    Returns a tuple ``(data, error_kind)``:
+      - ``(bytes, None)`` on success
+      - ``(None, ERR_*)`` on failure, with a coarse-grained category
+        suitable for the `last_error_kind` column.
+      - Raises ``ClipNotAvailableError`` (HTTP 404/400 on Frigate) and
+        ``ClipTooLargeError`` (size limit exceeded) unchanged.
+    """
     retry_count = 0
     last_error = None
+    last_error_kind = ERR_FRIGATE_DOWNLOAD_OTHER
 
     while retry_count <= max_retries:
         bytes_this_attempt = 0
@@ -334,10 +359,11 @@ def download_video_with_retry(video_url, event_id=None, max_retries=5, max_size_
                         if not data:
                             raise ValueError(f"Downloaded video is empty (0 bytes) from {video_url}")
                         logging.info(f"Download complete for {event_id}: {total_bytes / (1024*1024):.1f} MB total.")
-                        return data
+                        return data, None
 
         except ValueError as e:
             last_error = e
+            last_error_kind = ERR_FRIGATE_DOWNLOAD_EMPTY
             retry_count += 1
             if retry_count <= max_retries:
                 logging.warning(f"Attempt {retry_count}/{max_retries} for {event_id}: Video still empty, Frigate may still be writing. "
@@ -347,10 +373,18 @@ def download_video_with_retry(video_url, event_id=None, max_retries=5, max_size_
             raise
         except (requests.RequestException, ssl.SSLError, socket.timeout) as e:
             last_error = e
+            # Categorise the failure for the daily health report.
+            if isinstance(e, (socket.timeout, requests.Timeout)):
+                last_error_kind = ERR_FRIGATE_DOWNLOAD_TIMEOUT
+            elif isinstance(e, requests.HTTPError) and getattr(e.response, 'status_code', 0) >= 500:
+                last_error_kind = ERR_FRIGATE_DOWNLOAD_5XX
+            else:
+                last_error_kind = ERR_FRIGATE_DOWNLOAD_OTHER
             # If we've already downloaded significant data and Frigate cut off the stream,
             # this is a systematic Frigate clip assembly bug (e.g. corrupt segment).
             # Retrying won't help because Frigate re-assembles from the same source.
             if bytes_this_attempt > 100 * 1024 * 1024 and "prematurely" in str(e).lower():
+                last_error_kind = ERR_FRIGATE_DOWNLOAD_TRUNCATED
                 logging.warning(
                     f"Download aborted for {event_id} after {bytes_this_attempt / (1024*1024):.1f} MB "
                     f"with 'Response ended prematurely'. This is a systematic Frigate "
@@ -364,10 +398,19 @@ def download_video_with_retry(video_url, event_id=None, max_retries=5, max_size_
                 time.sleep(wait_time)
 
     logging.warning(f"Failed to download video for {event_id} from Frigate after {retry_count} attempts. Last error: {last_error}")
-    return None
+    return None, last_error_kind
 
 def upload_to_google_drive(event, frigate_url):
-    """Upload a video to Google Drive with retry logic and proper error handling."""
+    """
+    Upload a video to Google Drive with retry logic and proper error handling.
+
+    Returns a tuple ``(success, error_kind)``:
+      - ``(True, None)`` on success.
+      - ``(False, ERR_*)`` on failure; the kind is a coarse-grained category
+        suitable for the `last_error_kind` column.
+      - Raises ``ClipNotAvailableError`` / ``ClipTooLargeError`` unchanged so
+        the caller can apply specific handling (delete vs. mark non-retriable).
+    """
     import io  # Moved here to prevent early initialization issues
     
     camera_name = event['camera']
@@ -401,7 +444,7 @@ def upload_to_google_drive(event, frigate_url):
         # Another thread may have uploaded this event while we were waiting for the lock.
         if database.select_event_uploaded(event_id) == 1:
             logging.info(f"Event {event_id} was already uploaded by another thread. Skipping.")
-            return True
+            return True, None
         for attempt in range(MAX_RETRIES + 1):
             try:
                 # 1. Ensure folder structure exists
@@ -422,9 +465,15 @@ def upload_to_google_drive(event, frigate_url):
                     raise Exception(f"Failed to find or create folder: {day}")
 
                 # 2. Download video with retry logic
-                video_data = download_video_with_retry(video_url, event_id=event_id, max_size_bytes=MAX_CLIP_SIZE_BYTES)
+                video_data, download_err = download_video_with_retry(
+                    video_url, event_id=event_id, max_size_bytes=MAX_CLIP_SIZE_BYTES
+                )
                 if not video_data:
-                    raise Exception(f"Failed to download video from {video_url}")
+                    logging.warning(
+                        f"Failed to download video from {video_url} for {event_id} "
+                        f"(kind={download_err})"
+                    )
+                    return False, download_err or ERR_FRIGATE_DOWNLOAD_OTHER
 
                 # 3. Upload to Google Drive with resumable upload
                 media = MediaIoBaseUpload(
@@ -454,7 +503,7 @@ def upload_to_google_drive(event, frigate_url):
 
                 if 'id' in response:
                     logging.info(f"Video {filename} successfully uploaded to Google Drive with ID: {response['id']}.")
-                    return True
+                    return True, None
                 else:
                     raise Exception("No file ID returned from Google Drive")
 
@@ -463,14 +512,16 @@ def upload_to_google_drive(event, frigate_url):
                 raise
 
             except HttpError as error:
-                if attempt < MAX_RETRIES and error.resp.status in [500, 502, 503, 504, 429]:
+                status_code = error.resp.status
+                if attempt < MAX_RETRIES and status_code in [500, 502, 503, 504, 429]:
                     wait_time = exponential_backoff(attempt + 1)
-                    logging.warning(f"Attempt {attempt + 1}/{MAX_RETRIES} failed with status {error.resp.status}. "
+                    logging.warning(f"Attempt {attempt + 1}/{MAX_RETRIES} failed with status {status_code}. "
                                     f"Retrying in {wait_time:.2f}s. Error: {error}")
                     time.sleep(wait_time)
                     continue
                 logging.warning(f"HTTP error uploading to Google Drive: {error}")
-                return False
+                kind = ERR_DRIVE_5XX if status_code >= 500 else ERR_DRIVE_HTTP
+                return False, kind
 
             except (requests.RequestException, ssl.SSLError, socket.timeout, socket.error) as e:
                 if attempt < MAX_RETRIES:
@@ -479,13 +530,13 @@ def upload_to_google_drive(event, frigate_url):
                     time.sleep(wait_time)
                     continue
                 logging.warning(f"Error in upload process: {e}")
-                return False
+                return False, ERR_DRIVE_NETWORK
 
             except Exception as e:
                 logging.warning(f"Unexpected error during upload: {e}")
-                return False
+                return False, ERR_DRIVE_OTHER
 
         logging.warning(f"Failed to upload after {MAX_RETRIES + 1} attempts")
-        return False
+        return False, ERR_DRIVE_OTHER
 
 
