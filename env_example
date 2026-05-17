@@ -52,3 +52,7 @@ FRIGATE_URL=http://192.168.0.100:5000
 # Mattermost
 MATTERMOST_WEBHOOK_URL=
 MATTERMOST_PREFIX="[my message prefix]"
+
+# Optional: Time of day for the Daily Health Report (24h format HH:MM, container
+# timezone — see TZ above). Default: 09:00. Invalid values fall back to 09:00.
+HEALTH_REPORT_TIME=09:00

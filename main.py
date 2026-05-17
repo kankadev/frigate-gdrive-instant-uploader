@@ -91,6 +91,28 @@ MQTT_TOPIC = os.getenv('MQTT_TOPIC')
 MQTT_USER = os.getenv('MQTT_USER')
 MQTT_PASSWORD = os.getenv('MQTT_PASSWORD')
 MATTERMOST_WEBHOOK_URL = os.getenv('MATTERMOST_WEBHOOK_URL')
+HEALTH_REPORT_TIME = os.getenv('HEALTH_REPORT_TIME', '09:00')
+
+
+def parse_health_report_time(value, default_hour=9, default_minute=0):
+    """
+    Parse HEALTH_REPORT_TIME env var ('HH:MM' in 24h) into (hour, minute).
+    Falls back to the provided defaults on any parse error and logs a warning.
+    """
+    try:
+        parts = value.strip().split(':')
+        if len(parts) != 2:
+            raise ValueError("expected format 'HH:MM'")
+        hour, minute = int(parts[0]), int(parts[1])
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError("hour must be 0-23, minute 0-59")
+        return hour, minute
+    except (ValueError, AttributeError) as e:
+        logger.warning(
+            f"Invalid HEALTH_REPORT_TIME='{value}' ({e}). "
+            f"Falling back to {default_hour:02d}:{default_minute:02d}."
+        )
+        return default_hour, default_minute
 
 # Mattermost-Handler hinzufügen, falls konfiguriert
 if MATTERMOST_WEBHOOK_URL:
@@ -542,9 +564,13 @@ def main():
     scheduler.add_job(run_every_x_minutes, 'interval', minutes=10, next_run_time=initial_run)
     scheduler.add_job(run_every_6_hours, 'interval', hours=6, next_run_time=initial_run)
     scheduler.add_job(lambda: cleanup_old_files_on_drive(service), 'interval', days=1, next_run_time=initial_run)
-    scheduler.add_job(daily_health_report, 'cron', hour=9, minute=0)
+    health_hour, health_minute = parse_health_report_time(HEALTH_REPORT_TIME)
+    scheduler.add_job(daily_health_report, 'cron', hour=health_hour, minute=health_minute)
     scheduler.start()
-    logging.info(f"Scheduler started. First interval job run at {initial_run.strftime('%H:%M:%S')}.")
+    logging.info(
+        f"Scheduler started. First interval job run at {initial_run.strftime('%H:%M:%S')}. "
+        f"Daily health report scheduled at {health_hour:02d}:{health_minute:02d}."
+    )
 
     try:
         while True:
