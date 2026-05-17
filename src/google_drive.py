@@ -351,7 +351,7 @@ def download_video_with_retry(video_url, event_id=None, max_retries=5, max_size_
             # this is a systematic Frigate clip assembly bug (e.g. corrupt segment).
             # Retrying won't help because Frigate re-assembles from the same source.
             if bytes_this_attempt > 100 * 1024 * 1024 and "prematurely" in str(e).lower():
-                logging.error(
+                logging.warning(
                     f"Download aborted for {event_id} after {bytes_this_attempt / (1024*1024):.1f} MB "
                     f"with 'Response ended prematurely'. This is a systematic Frigate "
                     f"clip assembly bug, not a network hiccup. Giving up immediately."
@@ -363,7 +363,7 @@ def download_video_with_retry(video_url, event_id=None, max_retries=5, max_size_
                 logging.warning(f"Attempt {retry_count}/{max_retries} failed for {event_id} ({type(e).__name__}). Retrying in {wait_time:.2f}s. Error: {e}")
                 time.sleep(wait_time)
 
-    logging.error(f"Failed to download video for {event_id} from Frigate after {retry_count} attempts. Last error: {last_error}")
+    logging.warning(f"Failed to download video for {event_id} from Frigate after {retry_count} attempts. Last error: {last_error}")
     return None
 
 def upload_to_google_drive(event, frigate_url):

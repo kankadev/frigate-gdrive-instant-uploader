@@ -3,29 +3,7 @@
 Sammlung von Verbesserungen, die das Tool stabiler, schneller oder
 ressourcen-schonender machen würden. Reihenfolge nach geschätztem Nutzen.
 
-## 1. Datenbank-Index für die Retry-Queue
-
-**Status:** offen
-**Priorität:** mittel
-
-`select_not_uploaded_yet()` filtert auf `uploaded`, `retry` und `created`.
-Bei vielen Tausend Events (z.B. nach längerem Downtime) wird das ein
-Full-Table-Scan alle 10 Minuten.
-
-**Vorschlag:** Composite Index als Migration anlegen.
-
-```sql
-CREATE INDEX IF NOT EXISTS idx_pending
-    ON events (uploaded, retry, created);
-```
-
-**Aufwand:** sehr klein (eine Migration in `database.run_migrations()`).
-
-**Nutzen:** schnellerer Retry-Job bei großen DBs, weniger I/O.
-
----
-
-## 2. Cache für `internet()`-Check
+## 1. Cache für `internet()`-Check
 
 **Status:** offen
 **Priorität:** niedrig
@@ -46,7 +24,7 @@ robuster falls Internet-Check selbst kurz hängt.
 
 ---
 
-## 3. Konfigurierbare Uhrzeit für Daily Health Report
+## 2. Konfigurierbare Uhrzeit für Daily Health Report
 
 **Status:** offen
 **Priorität:** niedrig
@@ -59,7 +37,7 @@ geparst zu `hour`/`minute`.
 
 ---
 
-## 4. Optionale "Alles OK"-Stille-Modus
+## 3. Optionale "Alles OK"-Stille-Modus
 
 **Status:** offen
 **Priorität:** niedrig
@@ -73,7 +51,7 @@ nicht an Mattermost geschickt.
 
 ---
 
-## 5. Frigate-Reachability-Check vor dem Retry-Job
+## 4. Frigate-Reachability-Check vor dem Retry-Job
 
 **Status:** offen
 **Priorität:** mittel
@@ -90,7 +68,7 @@ mit `WARNING`-Log statt 400× Fehler.
 
 ---
 
-## 6. Strukturierte Fehlerstatistiken in der DB
+## 5. Strukturierte Fehlerstatistiken in der DB
 
 **Status:** offen
 **Priorität:** niedrig
@@ -105,7 +83,7 @@ Schritt es jeweils gescheitert ist (Download? Upload? Auth?).
 
 ---
 
-## 7. Maximale Event-Dauer für Uploads
+## 6. Maximale Event-Dauer für Uploads
 
 **Status:** offen
 **Priorität:** mittel
@@ -126,7 +104,7 @@ Durchsatz bei Backlogs.
 
 ---
 
-## 8. Maximale Clip-Größe überspringen (`MAX_CLIP_SIZE`)
+## 7. Maximale Clip-Größe überspringen (`MAX_CLIP_SIZE`)
 
 **Status:** offen
 **Priorität:** mittel
@@ -154,7 +132,7 @@ ablehnen.
 
 ---
 
-## 9. `fetch_all_events` als Generator (Streaming)
+## 8. `fetch_all_events` als Generator (Streaming)
 
 **Status:** offen
 **Priorität:** niedrig
@@ -172,7 +150,7 @@ und der Memory-Footprint konstant bleibt.
 
 ---
 
-## 10. MQTT `on_message` in separaten Thread auslagern
+## 9. MQTT `on_message` in separaten Thread auslagern
 
 **Status:** offen
 **Priorität:** hoch
@@ -200,7 +178,7 @@ threading.Thread(
 Das lässt `on_message` sofort zurückkehren. Der MQTT-Loop kann weiter pingen
 und neue Events empfangen.
 
-**Abhängigkeit:** Punkt 11 (Threading / Parallel-Uploads) — die gleichen
+**Abhängigkeit:** Punkt 10 (Threading / Parallel-Uploads) — die gleichen
 SQLite-Concurrency-Probleme gelten hier. WAL-Mode hilft, aber Connection-Sharing
 zwischen Threads kann trotzdem zu `database is locked` führen.
 
@@ -210,7 +188,7 @@ verspätet.
 
 ---
 
-## 11. Threading / Parallel-Uploads (mit SQLite-Warnung)
+## 10. Threading / Parallel-Uploads (mit SQLite-Warnung)
 
 **Status:** offen
 **Priorität:** niedrig (erst nach SQLite-Concurrency-Lösung)
@@ -259,5 +237,6 @@ Voraussetzungen erfüllt sein:
 - [x] **Mattermost-Benachrichtigung bei Aufgabe:** Event-Details, Kamera, Label, direkte Clip/Snapshot-URLs
 - [x] **Download-Progress-Logging:** INFO-Level alle 50MB für Diagnose von Freeze-Punkten
 - [x] **ChunkedEncodingError-Diagnose:** README-Doku für "korrupte Frigate-Segmente" hinzugefügt
-- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 9)
+- [x] **MQTT keepalive 60s→180s:** Schnellfix gegen "Keep alive timeout"-Disconnects während langer Downloads (richtige Lösung = Threading, siehe Punkt 9 oben)
+- [x] **Partial Indexes für Retry-Queue:** `idx_pending_retry` und `idx_pending_hard` (Migration 3) — `select_not_uploaded_yet[_hard]()` ohne Full-Table-Scan, ORDER BY `created` direkt aus dem Index
 - [x] **Download-Logs mit event_id:** Alle Progress/Complete/Abort-Messages enthalten jetzt die Event-ID für bessere Traceability bei parallelen Downloads
