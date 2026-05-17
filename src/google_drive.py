@@ -247,7 +247,7 @@ def exponential_backoff(retries):
 
 EMPTY_VIDEO_RETRY_DELAY = 10  # seconds to wait between retries when video is 0 bytes (Frigate still writing)
 
-def download_video_with_retry(video_url, max_retries=5):
+def download_video_with_retry(video_url, event_id=None, max_retries=5):
     """Download video with retry logic and proper timeout handling."""
     retry_count = 0
     last_error = None
@@ -294,20 +294,20 @@ def download_video_with_retry(video_url, max_retries=5):
                                 bytes_this_attempt += len(chunk)
                                 # Log every 50 MB so we can see progress before timeouts
                                 if total_bytes - last_log_bytes >= 50 * 1024 * 1024:
-                                    logging.info(f"Download progress: {total_bytes / (1024*1024):.1f} MB downloaded so far...")
+                                    logging.info(f"Download progress for {event_id}: {total_bytes / (1024*1024):.1f} MB downloaded so far...")
                                     last_log_bytes = total_bytes
                         fh.seek(0)
                         data = fh.read()
                         if not data:
                             raise ValueError(f"Downloaded video is empty (0 bytes) from {video_url}")
-                        logging.info(f"Download complete: {total_bytes / (1024*1024):.1f} MB total.")
+                        logging.info(f"Download complete for {event_id}: {total_bytes / (1024*1024):.1f} MB total.")
                         return data
 
         except ValueError as e:
             last_error = e
             retry_count += 1
             if retry_count <= max_retries:
-                logging.warning(f"Attempt {retry_count}/{max_retries}: Video still empty, Frigate may still be writing. "
+                logging.warning(f"Attempt {retry_count}/{max_retries} for {event_id}: Video still empty, Frigate may still be writing. "
                                 f"Retrying in {EMPTY_VIDEO_RETRY_DELAY}s...")
                 time.sleep(EMPTY_VIDEO_RETRY_DELAY)
         except (requests.RequestException, ssl.SSLError, socket.timeout) as e:
@@ -317,7 +317,7 @@ def download_video_with_retry(video_url, max_retries=5):
             # Retrying won't help because Frigate re-assembles from the same source.
             if bytes_this_attempt > 100 * 1024 * 1024 and "prematurely" in str(e).lower():
                 logging.error(
-                    f"Download aborted after {bytes_this_attempt / (1024*1024):.1f} MB "
+                    f"Download aborted for {event_id} after {bytes_this_attempt / (1024*1024):.1f} MB "
                     f"with 'Response ended prematurely'. This is a systematic Frigate "
                     f"clip assembly bug, not a network hiccup. Giving up immediately."
                 )
@@ -325,10 +325,10 @@ def download_video_with_retry(video_url, max_retries=5):
             retry_count += 1
             if retry_count <= max_retries:
                 wait_time = exponential_backoff(retry_count)
-                logging.warning(f"Attempt {retry_count}/{max_retries} failed ({type(e).__name__}). Retrying in {wait_time:.2f}s. Error: {e}")
+                logging.warning(f"Attempt {retry_count}/{max_retries} failed for {event_id} ({type(e).__name__}). Retrying in {wait_time:.2f}s. Error: {e}")
                 time.sleep(wait_time)
 
-    logging.error(f"Failed to download video from Frigate after {retry_count} attempts. Last error: {last_error}")
+    logging.error(f"Failed to download video for {event_id} from Frigate after {retry_count} attempts. Last error: {last_error}")
     return None
 
 def upload_to_google_drive(event, frigate_url):
@@ -368,7 +368,7 @@ def upload_to_google_drive(event, frigate_url):
                     raise Exception(f"Failed to find or create folder: {day}")
 
                 # 2. Download video with retry logic
-                video_data = download_video_with_retry(video_url)
+                video_data = download_video_with_retry(video_url, event_id=event_id)
                 if not video_data:
                     raise Exception(f"Failed to download video from {video_url}")
 
