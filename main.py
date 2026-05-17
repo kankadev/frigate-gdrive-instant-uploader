@@ -800,6 +800,15 @@ def main():
             host=HEALTHCHECK_BIND,
             port=HEALTHCHECK_PORT,
         )
+        # If the server is reachable from outside the container and no token
+        # is set, remind the user — /status would be public in that case.
+        if HEALTHCHECK_BIND != "127.0.0.1" and not HEALTHCHECK_TOKEN:
+            logging.warning(
+                "Healthcheck server is listening on all interfaces (0.0.0.0) "
+                "and no HEALTHCHECK_TOKEN is set. /status will be publicly "
+                "accessible if you expose this port. Set HEALTHCHECK_TOKEN "
+                "in your .env to require authentication for /status."
+            )
     except OSError as e:
         logging.error(
             f"Failed to start healthcheck server on {HEALTHCHECK_BIND}:{HEALTHCHECK_PORT}: {e}. "
