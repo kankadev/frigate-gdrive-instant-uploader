@@ -9,4 +9,12 @@ services:
       - ./logs:/app/logs
     environment:
       - TZ=Europe/Istanbul
+    # Expose the healthcheck HTTP server so external tools (Portainer,
+    # Uptime Kuma, Grafana, your own monitoring) can probe it.
+    # /health is unauthenticated (intentionally — Docker HEALTHCHECK
+    # cannot send auth headers). /status is optionally protected by
+    # HEALTHCHECK_TOKEN. Adjust the host port (left side) if 8080 is
+    # already taken on your server.
+    ports:
+      - "8080:8080"
     command: python main.py
