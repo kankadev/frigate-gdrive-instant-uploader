@@ -287,7 +287,7 @@ def handle_single_event(event_data, skip_wait=False, online=None):
                         snapshot_url = f"{FRIGATE_URL}/api/events/{event_id}/snapshot.jpg"
 
                         mm_text = (
-                            f"| Metrik | Wert |\n"
+                            f"| Metric | Value |\n"
                             f"|---|---|\n"
                             f"| **Event ID** | `{event_id}` |\n"
                             f"| **Camera** | {camera} |\n"
@@ -344,11 +344,11 @@ def _notify_frigate_unreachable_once():
     _frigate_unreachable_since = datetime.now()
     ts = _frigate_unreachable_since.strftime('%Y-%m-%d %H:%M:%S')
     send_mattermost_notification(
-        title=":warning: Frigate nicht erreichbar",
+        title=":warning: Frigate unreachable",
         text=(
-            f"Frigate ist seit **{ts}** (Container-Zeit) nicht erreichbar.\n\n"
-            f"Uploads werden pausiert, bis Frigate wieder antwortet. "
-            f"Du erhältst eine zweite Nachricht, sobald die Verbindung wiederhergestellt ist."
+            f"Frigate has been unreachable since **{ts}** (container time).\n\n"
+            f"Uploads are paused until Frigate responds again. "
+            f"You will receive a second message once the connection is restored."
         ),
         color="#ffae42",
     )
@@ -362,10 +362,10 @@ def _notify_frigate_recovered_once():
     downtime_str = _format_duration((datetime.now() - _frigate_unreachable_since).total_seconds())
     _frigate_unreachable_since = None
     send_mattermost_notification(
-        title=":white_check_mark: Frigate wieder erreichbar",
+        title=":white_check_mark: Frigate reachable again",
         text=(
-            f"Frigate antwortet wieder. Downtime: **{downtime_str}**.\n\n"
-            f"Pending Events werden im nächsten Job-Lauf abgearbeitet."
+            f"Frigate is responding again. Downtime: **{downtime_str}**.\n\n"
+            f"Pending events will be processed in the next job run."
         ),
         color="#36a64f",
     )
@@ -554,8 +554,8 @@ def daily_health_report():
     except Exception as e:
         logging.error(f"Failed to collect health stats: {e}")
         send_mattermost_notification(
-            title=":rotating_light: KRITISCH: Health-Report fehlgeschlagen",
-            text=f"Konnte keine Statistik aus der Datenbank lesen.\n\n**Fehler:** `{e}`",
+            title=":rotating_light: CRITICAL: Health report failed",
+            text=f"Could not read stats from the database.\n\n**Error:** `{e}`",
             color="#d50000",
         )
         return
@@ -569,44 +569,44 @@ def daily_health_report():
     )
 
     if is_critical:
-        title = ":rotating_light: KRITISCH – Frigate Uploader"
+        title = ":rotating_light: CRITICAL – Frigate Uploader"
         color = "#d50000"
-        headline = "**Es gibt Events, die seit über 3 Tagen nicht hochgeladen wurden, oder es lief in den letzten 24h gar nichts.**"
+        headline = "**There are events that haven't been uploaded for more than 3 days, or nothing was uploaded in the last 24h at all.**"
     elif is_warning:
-        title = ":warning: Warnung – Frigate Uploader"
+        title = ":warning: Warning – Frigate Uploader"
         color = "#ffae42"
-        headline = "Es gibt Events, die seit 1–3 Tagen warten. Bitte beobachten."
+        headline = "There are events that have been pending for 1–3 days. Please keep an eye on it."
     else:
-        title = ":white_check_mark: Frigate Uploader – alles in Ordnung"
+        title = ":white_check_mark: Frigate Uploader – all good"
         color = "#36a64f"
-        headline = "Tagesreport: alle Uploads laufen normal."
+        headline = "Daily report: all uploads are running normally."
 
     oldest = (
-        f"`{stats['oldest_pending_event_id']}` (**{stats['oldest_pending_age_days']} Tage** alt)"
+        f"`{stats['oldest_pending_event_id']}` (**{stats['oldest_pending_age_days']} days** old)"
         if stats["oldest_pending_event_id"]
-        else "_keine_"
+        else "_none_"
     )
 
     text = (
         f"{headline}\n\n"
-        f"| Metrik | Wert |\n"
+        f"| Metric | Value |\n"
         f"|---|---|\n"
-        f"| Hochgeladen letzte 24h | **{stats['uploaded_last_24h']}** |\n"
-        f"| Wartend gesamt | **{stats['pending_total']}** |\n"
-        f"| davon unter 1 Tag (normal) | {stats['pending_lt_1d']} |\n"
-        f"| davon 1–2 Tage | {stats['pending_1d_2d']} |\n"
-        f"| davon 2–3 Tage | {stats['pending_2d_3d']} |\n"
-        f"| davon **über 3 Tage** | **{stats['pending_gt_3d']}** |\n"
-        f"| Ältestes wartendes Event | {oldest} |\n"
-        f"| Insgesamt erfolgreich hochgeladen | {stats['total_uploaded']} |\n"
+        f"| Uploaded last 24h | **{stats['uploaded_last_24h']}** |\n"
+        f"| Pending total | **{stats['pending_total']}** |\n"
+        f"| thereof under 1 day (normal) | {stats['pending_lt_1d']} |\n"
+        f"| thereof 1–2 days | {stats['pending_1d_2d']} |\n"
+        f"| thereof 2–3 days | {stats['pending_2d_3d']} |\n"
+        f"| thereof **over 3 days** | **{stats['pending_gt_3d']}** |\n"
+        f"| Oldest pending event | {oldest} |\n"
+        f"| Total uploaded ever | {stats['total_uploaded']} |\n"
     )
 
     if is_critical:
         text += (
-            "\n**Empfohlene Aktionen:**\n"
-            "- Logs des Containers prüfen: `docker logs frigate-gdrive-instant-uploader --tail 200`\n"
-            "- DB-Zustand prüfen: `SELECT date(created), COUNT(*) FROM events WHERE uploaded=0 GROUP BY 1;`\n"
-            "- Frigate-Erreichbarkeit & Internet überprüfen\n"
+            "\n**Recommended actions:**\n"
+            "- Check container logs: `docker logs frigate-gdrive-instant-uploader --tail 200`\n"
+            "- Check DB state: `SELECT date(created), COUNT(*) FROM events WHERE uploaded=0 GROUP BY 1;`\n"
+            "- Verify Frigate reachability & internet connectivity\n"
         )
 
     is_ok = not is_critical and not is_warning
