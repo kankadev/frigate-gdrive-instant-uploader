@@ -956,11 +956,13 @@ def daily_health_report(scheduler):
         f"|---|---|\n"
         f"| Uploaded last 24h | **{stats['uploaded_last_24h']}** |\n"
         f"| Pending total | **{stats['pending_total']}** |\n"
+        f"| thereof retryable (action required) | **{stats.get('pending_retryable', 0)}** |\n"
+        f"| thereof non-retriable (gave up) | **{stats.get('pending_non_retryable', 0)}** |\n"
         f"| thereof under 1 day (normal) | {stats['pending_lt_1d']} |\n"
         f"| thereof 1–2 days | {stats['pending_1d_2d']} |\n"
         f"| thereof 2–3 days | {stats['pending_2d_3d']} |\n"
         f"| thereof **over 3 days** | **{stats['pending_gt_3d']}** |\n"
-        f"| Oldest pending event | {oldest} |\n"
+        f"| Oldest retryable event | {oldest} |\n"
         f"| Total uploaded ever | {stats['total_uploaded']} |\n"
     )
 
