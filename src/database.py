@@ -409,6 +409,25 @@ def get_health_stats(db_path=DB_PATH):
     return stats
 
 
+def get_last_successful_upload_timestamp(db_path=DB_PATH):
+    """
+    Return the timestamp (Unix epoch) of the last successful upload, or None.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT MAX(created) FROM events WHERE uploaded = 1"
+        )
+        result = cursor.fetchone()[0]
+        return result
+    except Exception as e:
+        logging.error(f"Error getting last successful upload timestamp: {e}")
+        return None
+    finally:
+        conn.close()
+
+
 def cleanup_old_events(db_path=DB_PATH):
     """
     Deletes ALL events older than DB_RETENTION_DAYS, regardless of upload status.
