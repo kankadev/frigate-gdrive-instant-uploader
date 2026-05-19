@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -499,6 +500,8 @@ def handle_single_event(event_data, skip_wait=False, online=None):
 # and ONCE when it recovers. While the state is unchanged, no notification.
 _frigate_unreachable_since = None  # datetime when the outage was first detected
 
+# Program start time for uptime tracking
+PROGRAM_START_TIME = datetime.now()
 
 def _format_duration(seconds):
     """Format a duration in seconds into a compact 'XhYmZs' string."""
@@ -735,7 +738,148 @@ def run_every_x_minutes():
     logging.info("=== Periodic job completed ===")
 
 
-def daily_health_report():
+def _get_uptime():
+    """Return uptime as a human-readable string (e.g., '2d 14h 30m')."""
+    uptime_seconds = (datetime.now() - PROGRAM_START_TIME).total_seconds()
+    return _format_duration(uptime_seconds)
+
+
+def _get_last_successful_upload():
+    """
+    Return the timestamp of the last successful upload, or None if no uploads yet.
+    """
+    try:
+        timestamp = database.get_last_successful_upload_timestamp()
+        if timestamp:
+            try:
+                import pytz
+                tz = pytz.timezone(os.getenv('TZ', 'UTC'))
+                dt = datetime.fromtimestamp(timestamp, pytz.utc).astimezone(tz)
+                return dt.strftime('%Y-%m-%d %H:%M:%S')
+            except Exception:
+                return f"timestamp={timestamp}"
+        return None
+    except Exception as e:
+        logging.warning(f"Failed to get last successful upload timestamp: {e}")
+        return None
+
+
+def _get_db_size():
+    """Return the DB file size in human-readable format."""
+    try:
+        db_path = database.DB_PATH
+        size_bytes = os.path.getsize(db_path)
+        # Convert to human-readable
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024
+        return f"{size_bytes:.1f} TB"
+    except Exception as e:
+        logging.warning(f"Failed to get DB size: {e}")
+        return "unknown"
+
+
+def _get_subsystem_status(scheduler):
+    """
+    Return subsystem status dict for health report.
+    Keys: db (bool), scheduler (bool), mqtt (bool), mqtt_status (str)
+    """
+    # DB health: try a quick query
+    try:
+        conn = sqlite3.connect(database.DB_PATH, timeout=2)
+        conn.execute("SELECT 1")
+        conn.close()
+        db_ok = True
+    except Exception:
+        db_ok = False
+
+    # Scheduler health
+    scheduler_ok = scheduler.running if scheduler else False
+
+    # MQTT health
+    mqtt_ok = _mqtt_is_connected()
+    mqtt_status = "connected" if mqtt_ok else "disconnected"
+
+    return {
+        "db": db_ok,
+        "scheduler": scheduler_ok,
+        "mqtt": mqtt_ok,
+        "mqtt_status": mqtt_status,
+    }
+
+
+def _check_clip_availability(event_id):
+    """
+    Check if a clip is still available on Frigate via HEAD request.
+    Returns True if available, False if not (404/400), None on network error.
+    """
+    try:
+        clip_url = f"{FRIGATE_URL}/api/events/{event_id}/clip.mp4"
+        response = requests.head(clip_url, timeout=10)
+        if response.status_code in (200, 206):
+            return True
+        elif response.status_code in (400, 404):
+            return False
+        else:
+            logging.debug(f"Unexpected status {response.status_code} for clip {event_id}")
+            return None
+    except (requests.RequestException, Timeout):
+        logging.debug(f"Network error checking clip {event_id}")
+        return None
+
+
+def _get_clip_availability_stats():
+    """
+    Check availability of clips for all pending events.
+    Returns dict with counts: available, not_available, unknown (network error).
+    Also returns the availability status of the oldest pending event.
+    """
+    event_ids = database.select_not_uploaded_yet()
+    if not event_ids:
+        return {"available": 0, "not_available": 0, "unknown": 0, "oldest_available": None}
+
+    available = 0
+    not_available = 0
+    unknown = 0
+    oldest_available = None
+
+    # Check the oldest event first (it's the one we display)
+    for i, event_id in enumerate(event_ids):
+        status = _check_clip_availability(event_id)
+        if status is True:
+            available += 1
+            if i == 0:  # oldest event
+                oldest_available = True
+        elif status is False:
+            not_available += 1
+            if i == 0:
+                oldest_available = False
+        else:  # None = network error
+            unknown += 1
+            if i == 0:
+                oldest_available = None
+
+    return {
+        "available": available,
+        "not_available": not_available,
+        "unknown": unknown,
+        "oldest_available": oldest_available,
+    }
+
+
+def _get_frigate_reachability_status():
+    """
+    Return Frigate reachability status string based on _frigate_unreachable_since.
+    """
+    if _frigate_unreachable_since is None:
+        return "reachable"
+    else:
+        downtime = _format_duration((datetime.now() - _frigate_unreachable_since).total_seconds())
+        return f"unreachable for {downtime}"
+
+
+def daily_health_report(scheduler):
     """
     Sends a daily status report to Mattermost.
     Determines OK / WARNING / CRITICAL based on pending event age and upload activity.
@@ -751,6 +895,14 @@ def daily_health_report():
             color="#d50000",
         )
         return
+
+    # Collect additional metrics
+    subsystem = _get_subsystem_status(scheduler)
+    uptime = _get_uptime()
+    last_upload = _get_last_successful_upload()
+    db_size = _get_db_size()
+    frigate_status = _get_frigate_reachability_status()
+    clip_stats = _get_clip_availability_stats()
 
     # Determine severity
     is_critical = stats["pending_gt_3d"] > 0 or (
@@ -779,6 +931,21 @@ def daily_health_report():
         else "_none_"
     )
 
+    # Add clip availability status for oldest event
+    if stats["oldest_pending_event_id"] and clip_stats.get("oldest_available") is not None:
+        if clip_stats["oldest_available"]:
+            oldest += " — **clip available**"
+        else:
+            oldest += " — **clip no longer available on Frigate**"
+    elif stats["oldest_pending_event_id"] and clip_stats.get("oldest_available") is None:
+        oldest += " — **availability check failed (network error)**"
+
+    # Subsystem status indicators
+    db_icon = ":white_check_mark:" if subsystem["db"] else ":x:"
+    scheduler_icon = ":white_check_mark:" if subsystem["scheduler"] else ":x:"
+    mqtt_icon = ":white_check_mark:" if subsystem["mqtt"] else ":x:"
+    frigate_icon = ":white_check_mark:" if frigate_status == "reachable" else ":x:"
+
     text = (
         f"{headline}\n\n"
         f"| Metric | Value |\n"
@@ -792,6 +959,27 @@ def daily_health_report():
         f"| Oldest pending event | {oldest} |\n"
         f"| Total uploaded ever | {stats['total_uploaded']} |\n"
     )
+
+    # Add clip availability statistics
+    if stats["pending_total"] > 0:
+        text += "\n**Clip Availability (pending events):**\n"
+        text += f"- Clips available on Frigate: **{clip_stats['available']}** (action required)\n"
+        text += f"- Clips no longer available: **{clip_stats['not_available']}** (cannot upload)\n"
+        if clip_stats['unknown'] > 0:
+            text += f"- Availability check failed: **{clip_stats['unknown']}** (network error)\n"
+
+    # Add subsystem status section
+    text += "\n**Subsystem Status:**\n"
+    text += f"- {db_icon} Database\n"
+    text += f"- {scheduler_icon} Scheduler\n"
+    text += f"- {mqtt_icon} MQTT ({subsystem['mqtt_status']})\n"
+    text += f"- {frigate_icon} Frigate ({frigate_status})\n"
+
+    # Add additional metrics
+    text += "\n**Additional Metrics:**\n"
+    text += f"- Uptime: {uptime}\n"
+    text += f"- Last successful upload: {last_upload or '_never_'}\n"
+    text += f"- DB size: {db_size}\n"
 
     # Surface a breakdown of failure categories among pending events so the
     # user can see at a glance whether the backlog is dominated by network
@@ -821,16 +1009,6 @@ def daily_health_report():
 
     send_mattermost_notification(title=title, text=text, color=color)
     logging.info(f"Health report sent: {title}")
-
-
-def run_every_6_hours():
-    logging.debug("Handling failed events...")
-    failed_events = database.select_not_uploaded_yet_hard()
-    if failed_events:
-        logging.error(
-            f"{len(failed_events)} failed events: {failed_events} ... Please check the logs for more information.")
-    else:
-        logging.debug("No failed events found.")
 
 
 def internet(host="8.8.8.8", port=53, timeout=3):
@@ -869,10 +1047,9 @@ def main():
     # 90s gives MQTT/Google auth a moment to settle first.
     initial_run = datetime.now() + timedelta(seconds=90)
     scheduler.add_job(run_every_x_minutes, 'interval', minutes=10, next_run_time=initial_run)
-    scheduler.add_job(run_every_6_hours, 'interval', hours=6, next_run_time=initial_run)
     scheduler.add_job(lambda: cleanup_old_files_on_drive(service), 'interval', days=1, next_run_time=initial_run)
     health_hour, health_minute = parse_health_report_time(HEALTH_REPORT_TIME)
-    scheduler.add_job(daily_health_report, 'cron', hour=health_hour, minute=health_minute)
+    scheduler.add_job(lambda: daily_health_report(scheduler), 'cron', hour=health_hour, minute=health_minute)
     scheduler.start()
     logging.info(
         f"Scheduler started. First interval job run at {initial_run.strftime('%H:%M:%S')}. "

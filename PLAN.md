@@ -66,7 +66,36 @@ schlagen fehl bis Neustart".
 
 ---
 
-## 3. Daily Health Report mit Retry bei Mattermost-Failure
+## 3. Daily Health Report erweitert, 6-stündiger Job entfernt, Clip-Availability-Statistik
+
+**Status:** erledigt
+**Priorität:** mittel
+
+Der 6-stündige Job (`run_every_6_hours`) wurde entfernt, da er redundant ist:
+- Pro-Event Notifications liefern bereits Details zu JEDEM failed Event (Kamera, Label, URLs, Fehlergrund)
+- Daily Health Report liefert die tägliche Statistik mit Error-Kinds und System-Zustand
+- Die 6-stündige ID-Liste ohne Kontext bringt keinen Mehrwert
+
+Der Daily Health Report wurde mit den folgenden Metriken erweitert:
+- **Subsystem-Status:** DB, Scheduler, MQTT (mit Icons :white_check_mark:/:x:)
+- **Uptime:** Laufzeit des Containers seit Start (z.B. "2d 14h 30m")
+- **Letzter erfolgreicher Upload:** Timestamp des letzten erfolgreichen Uploads oder "_never_"
+- **DB-Größe:** Dateigröße der SQLite-DB in human-readable Format (KB/MB/GB)
+- **Frigate-Reachability:** "reachable" oder "unreachable for Xd Yh Zm" (basierend auf edge-triggered Notifications)
+- **Clip-Availability-Statistik:** Unterscheidet zwischen pending events mit Clips verfügbar auf Frigate (Handlungsbedarf) und Clips nicht mehr verfügbar (nichts zu tun). Für das älteste pending Event wird angezeigt, ob der Clip noch verfügbar ist.
+
+Zusätzliche Änderungen:
+- `PROGRAM_START_TIME` global für Uptime-Tracking
+- `sqlite3` import in main.py für DB-Health-Check
+- `database.get_last_successful_upload_timestamp()` Funktion hinzugefügt
+- `_check_clip_availability(event_id)` Funktion (HEAD-Request auf Clip-URL)
+- `_get_clip_availability_stats()` Funktion (prüft alle pending events)
+- Helper-Funktionen für alle neuen Metriken
+- `daily_health_report()` nimmt jetzt `scheduler` Parameter für Subsystem-Status
+
+---
+
+## 4. Daily Health Report mit Retry bei Mattermost-Failure
 
 **Status:** offen
 **Priorität:** mittel
