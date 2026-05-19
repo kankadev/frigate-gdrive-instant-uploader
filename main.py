@@ -502,7 +502,15 @@ def handle_single_event(event_data, skip_wait=False, online=None):
 _frigate_unreachable_since = None  # datetime when the outage was first detected
 
 # Program start time for uptime tracking
-PROGRAM_START_TIME = datetime.now()
+_PROGRAM_START_TIME = None
+
+
+def _get_program_start_time():
+    """Lazy initialization of PROGRAM_START_TIME to avoid reset on import."""
+    global _PROGRAM_START_TIME
+    if _PROGRAM_START_TIME is None:
+        _PROGRAM_START_TIME = datetime.now()
+    return _PROGRAM_START_TIME
 
 def _format_duration(seconds):
     """Format a duration in seconds into a compact 'XhYmZs' string."""
@@ -741,7 +749,7 @@ def run_every_x_minutes():
 
 def _get_uptime():
     """Return uptime as a human-readable string (e.g., '2d 14h 30m')."""
-    uptime_seconds = (datetime.now() - PROGRAM_START_TIME).total_seconds()
+    uptime_seconds = (datetime.now() - _get_program_start_time()).total_seconds()
     return _format_duration(uptime_seconds)
 
 
