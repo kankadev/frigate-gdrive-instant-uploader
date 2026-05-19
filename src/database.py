@@ -386,6 +386,12 @@ def get_health_stats(db_path=DB_PATH):
         cursor.execute("SELECT COUNT(*) FROM events WHERE uploaded = 0")
         stats["pending_total"] = cursor.fetchone()[0]
 
+        cursor.execute("SELECT COUNT(*) FROM events WHERE uploaded = 0 AND retry > 0")
+        stats["pending_retryable"] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM events WHERE uploaded = 0 AND retry = 0")
+        stats["pending_non_retryable"] = cursor.fetchone()[0]
+
         cursor.execute(
             "SELECT COUNT(*) FROM events WHERE uploaded = 0 AND created >= datetime('now', '-1 day')"
         )
@@ -410,7 +416,7 @@ def get_health_stats(db_path=DB_PATH):
 
         cursor.execute(
             "SELECT event_id, CAST((julianday('now') - julianday(created)) AS REAL) "
-            "FROM events WHERE uploaded = 0 ORDER BY created ASC LIMIT 1"
+            "FROM events WHERE uploaded = 0 AND retry > 0 ORDER BY created ASC LIMIT 1"
         )
         row = cursor.fetchone()
         if row:
