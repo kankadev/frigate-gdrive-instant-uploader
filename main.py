@@ -967,14 +967,12 @@ def daily_health_report(scheduler):
     )
 
     # Add clip availability statistics
-    if stats["pending_total"] > 0:
-        text += "\n**Clip Availability (pending events):**\n"
+    if stats.get("pending_retryable", 0) > 0:
+        text += "\n**Clip Availability (retryable events):**\n"
         text += f"- Clips available on Frigate: **{clip_stats['available']}** (action required)\n"
         text += f"- Clips no longer available: **{clip_stats['not_available']}** (cannot upload)\n"
         if clip_stats['unknown'] > 0:
             text += f"- Availability check failed: **{clip_stats['unknown']}** (network error)\n"
-        if clip_stats['non_retryable'] > 0:
-            text += f"- Non-retriable (gave up): **{clip_stats['non_retryable']}** (see error kinds below)\n"
 
     # Add subsystem status section
     text += "\n**Subsystem Status:**\n"
