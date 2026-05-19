@@ -270,6 +270,27 @@ def select_not_uploaded_yet(db_path=DB_PATH):
         conn.close()
 
 
+def select_not_uploaded_yet_retryable(db_path=DB_PATH):
+    """
+    Selects events that are not uploaded yet and still retryable (retry > 0).
+    These are events that should still be actively retried.
+    :param db_path:
+    :return:
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT event_id FROM events WHERE uploaded = 0 and retry > 0 ORDER BY created ASC')
+        result = cursor.fetchall()
+        return [row[0] for row in result]
+    except Exception as e:
+        logging.error(f"Error selecting retryable pending events: {e}")
+        return []
+    finally:
+        conn.close()
+
+
 def select_not_uploaded_yet_hard(db_path=DB_PATH):
     """
     Selects events that are not uploaded yet and marked as non-retriable (e.g. deleted on Frigate). Use this e.g. for notifying the user.

@@ -832,13 +832,15 @@ def _check_clip_availability(event_id):
 
 def _get_clip_availability_stats():
     """
-    Check availability of clips for all pending events.
-    Returns dict with counts: available, not_available, unknown (network error).
-    Also returns the availability status of the oldest pending event.
+    Check availability of clips for retryable pending events (retry > 0).
+    Events with retry=0 are non-retriable and should not be marked as "action required".
+    Returns dict with counts: available, not_available, unknown (network error), non_retryable.
+    Also returns the availability status of the oldest retryable event.
     """
-    event_ids = database.select_not_uploaded_yet()
+    event_ids = database.select_not_uploaded_yet_retryable()
+    non_retryable = len(database.select_not_uploaded_yet_hard())
     if not event_ids:
-        return {"available": 0, "not_available": 0, "unknown": 0, "oldest_available": None}
+        return {"available": 0, "not_available": 0, "unknown": 0, "non_retryable": non_retryable, "oldest_available": None}
 
     available = 0
     not_available = 0
@@ -865,6 +867,7 @@ def _get_clip_availability_stats():
         "available": available,
         "not_available": not_available,
         "unknown": unknown,
+        "non_retryable": non_retryable,
         "oldest_available": oldest_available,
     }
 
@@ -968,6 +971,8 @@ def daily_health_report(scheduler):
         text += f"- Clips no longer available: **{clip_stats['not_available']}** (cannot upload)\n"
         if clip_stats['unknown'] > 0:
             text += f"- Availability check failed: **{clip_stats['unknown']}** (network error)\n"
+        if clip_stats['non_retryable'] > 0:
+            text += f"- Non-retriable (gave up): **{clip_stats['non_retryable']}** (see error kinds below)\n"
 
     # Add subsystem status section
     text += "\n**Subsystem Status:**\n"
