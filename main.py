@@ -434,13 +434,19 @@ def handle_single_event(event_data, skip_wait=False, online=None):
                         f"Failed to upload video {event_id} (recorded {recorded_at}). "
                         f"Attempt {tries}/{event_max_retries}."
                     )
-                    # Notification policy: send AT MOST two Mattermost messages per event.
+                    # Notification policy: send AT MOST one Mattermost message per event.
                     # - tries < 80% of event_max_retries: WARNING (file log only)
-                    # - tries == 80% threshold: single ERROR (early heads-up)
-                    # - tries >= event_max_retries: single ERROR (final give-up)
+                    # - tries == 80% threshold: ERROR heads-up, but ONLY when it gives
+                    #   meaningful advance warning (>= 2 attempts before give-up). For
+                    #   events with few retries (e.g. long events get only 3) the heads-up
+                    #   would fire back-to-back with the give-up, so it's suppressed.
+                    # - tries >= event_max_retries: file-log only WARNING + the rich
+                    #   give-up card below. The card IS the Mattermost notification, so we
+                    #   deliberately avoid an extra plain ERROR line going to Mattermost.
                     warning_threshold = max(1, int(event_max_retries * 0.8))
+                    heads_up_has_lead_time = (event_max_retries - warning_threshold) >= 2
                     if tries >= event_max_retries:
-                        logging.error(
+                        logging.warning(
                             f"Giving up on event {event_id} (recorded {recorded_at}) "
                             f"after {tries} failed attempts. Marked as non-retriable. "
                             f"No further upload attempts will be made for this event."
@@ -481,7 +487,7 @@ def handle_single_event(event_data, skip_wait=False, online=None):
                             text=mm_text,
                             color="#ffae42"
                         )
-                    elif tries == warning_threshold:
+                    elif tries == warning_threshold and heads_up_has_lead_time:
                         logging.error(
                             f"{msg} Heads-up: will give up at {event_max_retries} attempts."
                         )
