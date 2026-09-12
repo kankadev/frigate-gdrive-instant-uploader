@@ -1,0 +1,11 @@
+# Rebuild application code using an already verified local runtime image.
+# Supply its immutable image ID with --build-arg RUNTIME_BASE_IMAGE=sha256:...
+ARG RUNTIME_BASE_IMAGE
+FROM ${RUNTIME_BASE_IMAGE}
+WORKDIR /app
+RUN command -v ffprobe && rm -f /app/.env
+COPY main.py requirements.txt ./
+COPY src/ ./src/
+COPY db/migrations/ ./db/migrations/
+COPY tests/ ./tests/
+CMD ["python", "main.py"]

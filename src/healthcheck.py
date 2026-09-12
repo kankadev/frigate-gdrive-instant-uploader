@@ -54,6 +54,7 @@ class HealthState:
     # and so that we can re-check at request time (the underlying client
     # connection state changes over the process lifetime).
     mqtt_is_connected: Optional[Callable[[], bool]] = None
+    worker_is_alive: Optional[Callable[[], bool]] = None
     # Optional bearer token guarding /status. Empty/None disables auth.
     status_token: Optional[str] = None
     # When True, /health returns 503 instead of 200 (e.g. during shutdown).
@@ -167,7 +168,8 @@ class _SilentHandler(BaseHTTPRequestHandler):
         # MQTT is NOT a hard requirement — the periodic scheduler job is the
         # safety net that picks up missed events. We surface its state but
         # do not flunk the healthcheck on it.
-        is_healthy = db_ok and scheduler_ok and not shutting_down
+        worker_ok = _check_mqtt(s.worker_is_alive) if s.worker_is_alive else True
+        is_healthy = db_ok and scheduler_ok and worker_ok and not shutting_down
 
         payload = {
             "status": "ok" if is_healthy else "unhealthy",
@@ -175,6 +177,7 @@ class _SilentHandler(BaseHTTPRequestHandler):
                 "db": "ok" if db_ok else "fail",
                 "scheduler": "ok" if scheduler_ok else "fail",
                 "mqtt": "ok" if mqtt_ok else "disconnected",
+                "upload_worker": "ok" if worker_ok else "fail",
             },
         }
         if shutting_down:

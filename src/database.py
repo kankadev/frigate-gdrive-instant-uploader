@@ -7,10 +7,9 @@ DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'db/events.db
 load_dotenv()
 
 # Single retention period for the local SQLite DB.
-# After DB_RETENTION_DAYS days an event is removed regardless of upload status:
+# Only successful event markers expire after DB_RETENTION_DAYS:
 #   - uploaded=1: Drive file remains; the DB row served only as a dedup marker.
-#   - uploaded=0: Frigate's typical retention is 14 days, so after DB_RETENTION_DAYS
-#     the clip is definitively gone and retrying is pointless.
+#   - uploaded=0: preserved until the source is checked; age does not prove absence.
 # Backwards-compat: respect the legacy EVENT_RETENTION_DAYS / STALE_PENDING_DAYS
 # variables if either is set; otherwise default to 30 days.
 DB_RETENTION_DAYS = int(
@@ -94,8 +93,10 @@ def run_migrations(migrations_folder='db/migrations'):
                 except Exception as e:
                     logging.error(f"Error applying migration {filename}: {e}")
                     conn.rollback()
+                    raise
     except Exception as e:
         logging.error(f"Error running migrations: {e}")
+        raise
     finally:
         conn.close()
 
@@ -124,7 +125,7 @@ def insert_event(event_id, start_time, db_path=DB_PATH):
     conn = sqlite3.connect(db_path)
     try:
         cursor = conn.cursor()
-        cursor.execute('INSERT INTO events (event_id, start_time) VALUES (?, ?)', (event_id, start_time))
+        cursor.execute('INSERT OR IGNORE INTO events (event_id, start_time) VALUES (?, ?)', (event_id, start_time))
         conn.commit()
     except Exception as e:
         logging.error(f"Error inserting event: {e}")
@@ -376,7 +377,7 @@ def get_health_stats(db_path=DB_PATH):
         cursor = conn.cursor()
 
         cursor.execute(
-            "SELECT COUNT(*) FROM events WHERE uploaded = 1 AND created >= datetime('now', '-1 day')"
+            "SELECT COUNT(*) FROM events WHERE uploaded = 1 AND last_updated >= datetime('now', '-1 day')"
         )
         stats["uploaded_last_24h"] = cursor.fetchone()[0]
 
@@ -393,24 +394,24 @@ def get_health_stats(db_path=DB_PATH):
         stats["pending_non_retryable"] = cursor.fetchone()[0]
 
         cursor.execute(
-            "SELECT COUNT(*) FROM events WHERE uploaded = 0 AND created >= datetime('now', '-1 day')"
+            "SELECT COUNT(*) FROM events WHERE uploaded = 0 AND retry > 0 AND created >= datetime('now', '-1 day')"
         )
         stats["pending_lt_1d"] = cursor.fetchone()[0]
 
         cursor.execute(
-            "SELECT COUNT(*) FROM events WHERE uploaded = 0 "
+            "SELECT COUNT(*) FROM events WHERE uploaded = 0 AND retry > 0 "
             "AND created < datetime('now', '-1 day') AND created >= datetime('now', '-2 day')"
         )
         stats["pending_1d_2d"] = cursor.fetchone()[0]
 
         cursor.execute(
-            "SELECT COUNT(*) FROM events WHERE uploaded = 0 "
+            "SELECT COUNT(*) FROM events WHERE uploaded = 0 AND retry > 0 "
             "AND created < datetime('now', '-2 day') AND created >= datetime('now', '-3 day')"
         )
         stats["pending_2d_3d"] = cursor.fetchone()[0]
 
         cursor.execute(
-            "SELECT COUNT(*) FROM events WHERE uploaded = 0 AND created < datetime('now', '-3 day')"
+            "SELECT COUNT(*) FROM events WHERE uploaded = 0 AND retry > 0 AND created < datetime('now', '-3 day')"
         )
         stats["pending_gt_3d"] = cursor.fetchone()[0]
 
@@ -444,7 +445,7 @@ def get_last_successful_upload_timestamp(db_path=DB_PATH):
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT MAX(created) FROM events WHERE uploaded = 1"
+            "SELECT CAST(strftime('%s', MAX(last_updated)) AS INTEGER) FROM events WHERE uploaded = 1"
         )
         result = cursor.fetchone()[0]
         return result
@@ -457,7 +458,7 @@ def get_last_successful_upload_timestamp(db_path=DB_PATH):
 
 def cleanup_old_events(db_path=DB_PATH):
     """
-    Deletes ALL events older than DB_RETENTION_DAYS, regardless of upload status.
+    Deletes successful dedup markers only; unresolved work is never aged out.
     Returns the number of deleted rows split by status: (uploaded_deleted, pending_deleted).
     """
     conn = sqlite3.connect(db_path)
@@ -469,7 +470,7 @@ def cleanup_old_events(db_path=DB_PATH):
             'SELECT '
             '  SUM(CASE WHEN uploaded = 1 THEN 1 ELSE 0 END), '
             '  SUM(CASE WHEN uploaded = 0 THEN 1 ELSE 0 END) '
-            'FROM events WHERE created <= datetime("now", ? || " days")',
+            'FROM events WHERE uploaded = 1 AND created <= datetime("now", ? || " days")',
             (f"-{DB_RETENTION_DAYS}",)
         )
         row = cursor.fetchone()
@@ -477,9 +478,11 @@ def cleanup_old_events(db_path=DB_PATH):
         pending_deleted = row[1] or 0
 
         cursor.execute(
-            'DELETE FROM events WHERE created <= datetime("now", ? || " days")',
+            'DELETE FROM events WHERE uploaded = 1 AND created <= datetime("now", ? || " days")',
             (f"-{DB_RETENTION_DAYS}",)
         )
+        cursor.execute("DELETE FROM upload_parts WHERE event_id NOT IN (SELECT event_id FROM events)")
+        cursor.execute("DELETE FROM upload_jobs WHERE event_id NOT IN (SELECT event_id FROM events)")
         conn.commit()
 
         total = uploaded_deleted + pending_deleted

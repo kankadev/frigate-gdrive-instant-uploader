@@ -3,12 +3,21 @@ services:
     build: .
     container_name: frigate-gdrive-instant-uploader
     restart: unless-stopped
+    env_file:
+      - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "10"
+        compress: "true"
     volumes:
       - ./credentials:/app/credentials
       - ./db:/app/db
       - ./logs:/app/logs
     environment:
       - TZ=Europe/Istanbul
+      - DB_RETENTION_DAYS=21
     # Expose the healthcheck HTTP server so external tools (Portainer,
     # Uptime Kuma, Grafana, your own monitoring) can probe it.
     # /health is unauthenticated (intentionally — Docker HEALTHCHECK

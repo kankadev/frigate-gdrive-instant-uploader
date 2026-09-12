@@ -74,7 +74,7 @@ def fetch_all_events(frigate_url, after=None, batch_size=100, retries=2, timeout
         params = {'limit': batch_size, 'has_clip': 1}
         if before:
             params['before'] = before
-        elif after:
+        if after:
             params['after'] = after
 
         for attempt in range(retries):
@@ -82,7 +82,7 @@ def fetch_all_events(frigate_url, after=None, batch_size=100, retries=2, timeout
                 response = requests.get(f'{frigate_url}/api/events', params=params, timeout=timeout)
                 response.raise_for_status()  # Raise an HTTPError for bad responses
                 break  # If the request was successful, exit the retry loop
-            except (ChunkedEncodingError, ConnectionError) as e:
+            except requests.RequestException as e:
                 logging.warning(f"Attempt {attempt + 1} failed with error: {e}")
                 if attempt < retries - 1:
                     sleep(2)  # Wait a bit before retrying
@@ -95,8 +95,11 @@ def fetch_all_events(frigate_url, after=None, batch_size=100, retries=2, timeout
             if not events:
                 break  # No more events to fetch
             all_events.extend(events)
-            before = events[-1]['start_time']
-            after = None  # Clear after the first successful fetch
+            next_before = events[-1]['start_time']
+            if before is not None and next_before >= before:
+                raise ValueError('Frigate pagination did not advance')
+            before = next_before
+            # Keep the lower bound on every page.
             logging.debug(f"Fetched {len(events)} events, next 'before' set to {before}")
         else:
             logging.error(f"Failed to fetch events: {response.status_code} {response.text}")

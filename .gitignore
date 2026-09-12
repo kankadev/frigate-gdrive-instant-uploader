@@ -168,3 +168,4 @@ cython_debug/
 /logs/*
 !/logs/.gitkeep
 /.vscode
+db/spool/

@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+credentials/
+logs/
+db/*
+!db/migrations/
+!db/migrations/**
+**/__pycache__/
+*.pyc
+.pytest_cache/

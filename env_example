@@ -9,32 +9,13 @@ LOGGING_LEVEL=DEBUG
 # Set to 0 to disable automatic deletion.
 GDRIVE_RETENTION_DAYS=0
 
-# Optional: How long to keep events in the local SQLite DB, regardless of whether
-# they were uploaded or not. After this period the row is deleted (the file in
-# Google Drive is not affected - it stays there). Should be safely larger than
-# your Frigate clip retention (typically 14 days). Default: 30 days.
-# Legacy variables EVENT_RETENTION_DAYS and STALE_PENDING_DAYS are still
-# respected as fallbacks for backwards compatibility.
+# Successful upload markers only. Keep longer than Frigate source retention.
+# Pending and confirmed unavailable work is retained independently.
 DB_RETENTION_DAYS=30
 
-# Optional: After how many failed upload attempts an event is marked as
-# non-retriable (retry=0). At a 10-minute retry interval, 50 attempts equal
-# about 8 hours of trying. After that the event is no longer touched but stays
-# in the DB until DB_RETENTION_DAYS deletes it. Default: 50.
+# Legacy compatibility settings; not used by the durable segmented worker.
 MAX_RETRY_ATTEMPTS=50
-
-# Optional: Maximum clip size to upload. Human-readable values like 5GB, 500MB.
-# Clips larger than this are skipped immediately (marked as non-retriable).
-# Set to 0 or leave empty to disable the limit.
-MAX_CLIP_SIZE=5GB
-
-# Optional: Skip events whose duration (end_time - start_time) exceeds this
-# number of seconds. Useful as a complement to MAX_CLIP_SIZE: catches long
-# but low-bitrate events (e.g. a 5h "stationary object" clip that ends up at
-# 1.5 GB and would slip past MAX_CLIP_SIZE=5GB). Also avoids the expensive
-# Frigate clip-assembly roundtrip on the /clip.mp4 endpoint, which can hang
-# for minutes on very long events. Value is in seconds. Set to 0 or leave
-# empty to disable. Example: 14400 = 4h.
+MAX_CLIP_SIZE=0
 SKIP_EVENTS_LONGER_THAN_SECONDS=0
 
 # MQTT

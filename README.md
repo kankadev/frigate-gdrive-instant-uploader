@@ -1,26 +1,54 @@
 # Frigate to Google Drive Instant Uploader with MQTT
 
-Uploads event clips from Frigate to Google Drive **instantly** via MQTT and reliably catches up on missed
-uploads via a 10-minute retry scheduler. A SQLite database keeps track of every event so nothing is lost
-during internet outages or container restarts.
+Uploads the recorded portions of completed Frigate object events to Google Drive.
+MQTT queues events promptly; HTTP reconciles the complete DB retention window every
+10 minutes, including long events that ended during a disconnected period.
 
-> ## ⚠ Breaking changes for existing users
->
-> The retention configuration was simplified. **Please review your `.env`:**
->
-> - **New:** `DB_RETENTION_DAYS` (default `30`) – controls retention for **all** events in the local SQLite DB, regardless of upload status.
-> - **Deprecated but still supported:** `EVENT_RETENTION_DAYS` and `STALE_PENDING_DAYS` are picked up as fallbacks. You don't need to change anything immediately, but the recommended action is to replace them with `DB_RETENTION_DAYS`.
-> - **Behavioural change:** previously `uploaded=1` and `uploaded=0` rows had separate retention windows. Now both share the same window. As long as your retention is safely above Frigate's clip retention (typically 14 days) there is **no risk of data loss** – the file in Google Drive is never touched by this cleanup.
->
-> Other new env vars introduced recently:
->
-> - `MAX_RETRY_ATTEMPTS` (default `50`) – give up on an event after this many failed upload attempts (~8 h at 10‑minute cadence).
-> - `MATTERMOST_PREFIX` – optional prefix added to all Mattermost messages.
+## Recovery behavior
+
+- Pending work and confirmed unavailable records persist across restarts and DB cleanup.
+- Transient failures retry indefinitely with backoff from 1 minute to 1 hour.
+- Source absence requires successful checks at least one hour apart. Network and
+  authentication errors never count as proof that a recording disappeared.
+- Existing recordings are exported in parts of at most 5 minutes, targeting 128 MiB.
+  Parts use a 512 MiB download safety limit and a persistent spool capped near 2 GiB.
+  Hitting a safety limit retains the job for investigation; it never marks it uploaded.
+- Each part is checked with ffprobe, then verified against Drive size and MD5.
+  Pre-generated Drive IDs recover uploads whose success response was lost.
+- Single-part events retain their filename. Multipart events add `__part-00001`, etc.
+- No object-label or total-event-duration filter discards existing recordings.
+  Motion without an object event is outside this uploader's scope.
+- Recovery depends on Frigate retaining the source until it is downloaded. A long
+  outage extending beyond source retention can still leave unavailable material.
+
+`DB_RETENTION_DAYS` applies only to successful deduplication markers. Set it above
+Frigate retention. Legacy `MAX_RETRY_ATTEMPTS`, `MAX_CLIP_SIZE`, and
+`SKIP_EVENTS_LONGER_THAN_SECONDS` no longer control the durable worker.
 
 ## Features
-- **Instant upload** via MQTT (`event end` triggers upload within seconds)
-- **Self-healing retry queue:** events that fail to upload stay in the DB and are retried every 10 minutes
-- **Hard-fail cleanup:** events that no longer exist on Frigate (HTTP 404) are removed from the DB automatically – no log spam
+
+Configuration is provided through Compose's `env_file`; credentials, SQLite data,
+logs and downloaded video parts are excluded from the Docker build context.
+They remain in the existing runtime bind mounts.
+
+For an application-only redeployment, retain the verified local runtime image and
+build the committed source without updating Python or system packages:
+
+```bash
+base_image=$(docker inspect -f '{{.Image}}' frigate-gdrive-instant-uploader)
+revision=$(git rev-parse HEAD)
+docker build -f Dockerfile.runtime --build-arg RUNTIME_BASE_IMAGE="$base_image" \
+  --label org.opencontainers.image.revision="$revision" -t frigate-uploader:verified .
+```
+
+Test the image before assigning it to the Compose service. A normal fresh build
+still uses `Dockerfile`. Never publish an image derived from an older runtime
+that might contain credentials in historical layers; use a clean build context
+and review dependencies before distributing images.
+
+- **Prompt queueing** via MQTT (completed events become eligible after 30 seconds)
+- **Self-healing retry queue:** failed events remain in SQLite and retry with bounded backoff
+- **Missing-source records:** confirmed absent recordings retain an explicit unavailable status
 - **Folder structure based on recording date:** `/<UPLOAD_DIR>/<YEAR>/<MONTH>/<DAY>/`
 - **Filename includes detected object label:** e.g. `2026-05-15-19-51-14__inside_kitchen__person__<event_id>.mp4`
 - **Thread-safe uploads:** a global lock serializes concurrent Google Drive API calls (prevents SSL errors)
@@ -90,9 +118,9 @@ All configuration is read from `.env` (use `env_example` as template).
 | `GOOGLE_ACCOUNT_TO_IMPERSONATE` | – | Drive account the service account impersonates |
 | `UPLOAD_DIR` | `frigate` | Root folder in Drive; videos go to `/UPLOAD_DIR/YYYY/MM/DD/` |
 | `DB_RETENTION_DAYS` | `30` | Delete SQLite rows older than this, regardless of upload status. Drive files unaffected |
-| `MAX_RETRY_ATTEMPTS` | `50` | Give up retrying a single event after this many failed attempts (≈8 h) |
-| `MAX_CLIP_SIZE` | – | Skip clips larger than this (e.g. `5GB`, `500MB`). `0` or empty = no limit. Marked as non-retriable. |
-| `SKIP_EVENTS_LONGER_THAN_SECONDS` | `0` | Skip events whose duration (`end_time - start_time`) exceeds this. Complements `MAX_CLIP_SIZE` for long-but-small clips and avoids Frigate clip-assembly hangs. `0` = off. Example: `14400` = 4h. |
+| `MAX_RETRY_ATTEMPTS` | `50` | Legacy setting; durable worker retries transient errors indefinitely |
+| `MAX_CLIP_SIZE` | – | Legacy setting; durable worker exports bounded parts without discarding whole events |
+| `SKIP_EVENTS_LONGER_THAN_SECONDS` | `0` | Legacy setting; durable worker does not discard long events |
 | `HEALTH_REPORT_TIME` | `09:00` | Time of day (24h `HH:MM`, container timezone) to send the Daily Health Report. Invalid values fall back to `09:00`. |
 | `HEALTH_REPORT_ONLY_ON_ISSUES` | `false` | When `true`, OK reports are only logged (INFO), not sent to Mattermost. WARNING / CRITICAL reports are always sent. |
 | `HEALTHCHECK_BIND` | `0.0.0.0` | Interface the in-process healthcheck HTTP server binds to. Use `127.0.0.1` to restrict to the container's loopback. |
@@ -106,7 +134,7 @@ All configuration is read from `.env` (use `env_example` as template).
 
 | Interval | Job | Purpose |
 |---|---|---|
-| Every 10 min | `run_every_x_minutes` | Clean up old DB rows, fetch missed events, retry failed uploads |
+| Every 10 min | `run_every_x_minutes` | Reconcile source events and clean successful DB markers; separate worker handles retries |
 | Every 6 h | `run_every_6_hours` | Log/notify about hard-failed events (legacy) |
 | Daily, `HEALTH_REPORT_TIME` (default 09:00) | `daily_health_report` | Mattermost status report (OK / WARNING / CRITICAL) |
 | Daily | `cleanup_old_files_on_drive` | Delete Google Drive files older than `GDRIVE_RETENTION_DAYS` (skipped if `0`) |
@@ -136,7 +164,7 @@ inside the container, so external port exposure is **optional**.
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `GET /health` | none | Liveness probe. `200 OK` if DB and scheduler are up, `503` otherwise. MQTT disconnects do not flunk this — the periodic job is the safety net. |
+| `GET /health` | none | Liveness probe. `200 OK` if DB, scheduler and upload worker are up, `503` otherwise. MQTT disconnects do not flunk this — the periodic job is the safety net. |
 | `GET /status` | optional bearer token | Detailed JSON: aggregate counts, error-kind breakdown, subsystem state. No sensitive data (no event IDs, no paths, no URLs). |
 
 ## Configure
@@ -205,85 +233,20 @@ curl -H "Authorization: Bearer $HEALTHCHECK_TOKEN" http://your-host:8080/status
 
 # Troubleshooting
 
-## Large event uploads fail with `ChunkedEncodingError` or `Read timed out`
+## Downloads, outages and long events
 
-Frigate assembles clip MP4s on-the-fly when you request `/api/events/<id>/clip.mp4`.
-For events longer than a few hours this can take several minutes. By default Frigate's
-internal nginx proxy kills the stream after **360 seconds** (`proxy_read_timeout 360`),
-causing a `ChunkedEncodingError: Response ended prematurely` or `Read timed out` in
-the uploader.
+The worker exports the recorded time ranges rather than requesting a many-hour
+event export. A corrupt or truncated part remains pending; completed parts are
+not uploaded again. `upload_jobs.error` and `events.last_error_kind` record the
+latest failure. Check source retention promptly when failures persist.
 
-**Fix:** increase the proxy timeout on the Frigate side.
+MQTT callbacks do no downloads or cloud work. Paho retries initial connections
+and subsequent disconnects automatically. The daily report shows the actual
+MQTT connection state separately from HTTP reconciliation and uploads.
 
-1. Copy the default proxy config out of the running Frigate container:
-   ```bash
-   docker cp frigate:/usr/local/nginx/conf/proxy.conf /opt/frigate/proxy_custom.conf
-   ```
-2. Increase the two timeout lines (e.g. to **600 seconds = 10 minutes**):
-   ```bash
-   sed -i 's/proxy_read_timeout 360;/proxy_read_timeout 600;/' /opt/frigate/proxy_custom.conf
-   sed -i 's/proxy_send_timeout 360;/proxy_send_timeout 600;/' /opt/frigate/proxy_custom.conf
-   ```
-   > **Why not higher?** Values above 600 s block the upload queue for too long
-   > when Frigate has a systematic clip-assembly bug (e.g. a corrupt recording segment).
-   > The uploader uses dynamic retry limits: events >3 h get only 3 retries (~30 min total).
-   >
-   > **Alternative:** set `MAX_CLIP_SIZE` (e.g. `5GB`) to skip oversized clips instantly
-   > instead of downloading them for minutes. Skipped clips are marked as non-retriable.
-3. Mount the custom file into the Frigate container (read-only) via `docker-compose.yml`:
-   ```yaml
-   services:
-     frigate:
-       volumes:
-         - /opt/frigate/proxy_custom.conf:/usr/local/nginx/conf/proxy.conf:ro
-   ```
-4. Restart Frigate:
-   ```bash
-   docker compose down && docker compose up -d
-   ```
-5. Rebuild and restart the uploader:
-   ```bash
-   cd ~/frigate-gdrive-instant-uploader
-   docker compose down && docker compose up -d --build
-   ```
-
-> **Note:** the uploader itself also uses a streaming-friendly tuple timeout
-> `(connect_timeout, read_timeout)` for the HTTP client. If you still see timeouts
-> after raising Frigate's nginx limit, you can also increase the uploader's
-> `DOWNLOAD_TIMEOUT` in `src/google_drive.py` (default is `(60, 600)` — 60 s connect,
-> 600 s read).
-
-## Broken / corrupt clips on Frigate
-
-If a specific event consistently freezes at the same byte count (e.g. always ~750 MB
-out of 1 GB) across multiple retries, the underlying Frigate recording segment is
-likely corrupt. Frigate re-assembles the clip on every request, so a corrupt source
-segment will never resolve itself.
-
-**Symptoms:**
-- Download progress logs stop at the same MB count every time
-- Frigate nginx shows `upstream timed out` after ~20 minutes
-- The clip plays in Frigate's UI but freezes at the same timestamp
-
-**Workaround:**
-The uploader will give up on such events faster (3 retries for >3 h events, 10 for
-1–3 h) and send a **Mattermost notification** with the direct clip URL so you can
-try a manual download before Frigate's retention expires.
-
-## MQTT disconnects during long downloads
-
-If you see `MQTT disconnected with result code: Keep alive timeout` while a large
-event is downloading, this is expected. The MQTT client thread is blocked by the
-upload and cannot send ping packets to the broker. The client reconnects
-automatically within seconds.
-
-**Impact:** New "instant" events arriving during the disconnect are delayed until
-the reconnect happens or the next 10-minute periodic job picks them up.
-
-**Schnellfix:** keepalive raised to 180s (disconnect after ~270s instead of ~90s).
-
-**Richtige Lösung:** Run `handle_single_event` in a background thread so
-`on_message` returns immediately. See `PLAN.md` point 9.
+Do not manually set `uploaded=1` to silence an error. Source-unavailable events
+have `uploaded=0`, `retry=0` and an `upload_jobs.state` of `unavailable`; partial
+success remains visible in `upload_parts`.
 
 Inspect the local database:
 ```bash
@@ -325,4 +288,4 @@ FROM events WHERE uploaded = 0 ORDER BY created ASC LIMIT 20;
 - Folder structure in Google Drive is based on the event's **recording time** (`start_time`), not the upload time.
   A clip recorded on May 14 will always land in `/UPLOAD_DIR/2026/05/14/`, even if uploaded later.
 - Files manually deleted in Google Drive are **not re-uploaded**, because the SQLite DB still records them as `uploaded=1`.
-- Hard-failed events (Frigate returned 404) are deleted from the DB to keep it clean. They cannot be recovered.
+- Confirmed missing-source records remain in the DB; unavailable does not mean successfully uploaded.

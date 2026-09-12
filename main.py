@@ -72,7 +72,7 @@ from dotenv import load_dotenv
 import paho.mqtt.client as mqtt
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from src import database, google_drive
+from src import database, google_drive, work_queue, segmented_upload
 from src.frigate_api import fetch_all_events, fetch_event, check_frigate_reachable, EventNotFoundError, ClipNotAvailableError, ClipTooLargeError, FrigateUnreachableError
 from src.google_drive import cleanup_old_files_on_drive, service
 from src.healthcheck import HealthState, start_healthcheck_server
@@ -299,24 +299,27 @@ else:
     logger.warning("MATTERMOST_WEBHOOK_URL nicht gesetzt. Mattermost-Benachrichtigungen sind deaktiviert.")
 
 
+_work_ready = threading.Event()
+_upload_worker = None
+
+
 def on_connect(client, userdata, flags, reason_code, properties):
-    logging.info(f"MQTT connected with result code {reason_code}")
-    client.subscribe(MQTT_TOPIC)
+    if reason_code == 0:
+        logging.info('MQTT connected; subscribing to event notifications')
+        client.subscribe(MQTT_TOPIC)
+    else:
+        logging.warning('MQTT connection rejected: %s', reason_code)
 
 
 def on_message(client, userdata, msg):
-    logging.debug(f"MQTT message received `{msg.payload.decode()}` from topic `{msg.topic}`")
-    event = json.loads(msg.payload)
-    event_type = event.get('type', None)
-    end_time = event.get('after', {}).get('end_time', None)
-    has_clip = event.get('after', {}).get('has_clip', False)
-
-    if event_type == 'end' and end_time is not None and has_clip is True:
-        event_data = event['after']
-        handle_single_event(event_data)
-    else:
-        logging.debug(f"Received a MQTT message but event type, end_time or has_clip doesn't interest us. Wait for "
-                      f"the full message. Skipping...")
+    try:
+        payload = json.loads(msg.payload)
+        if payload.get('type') == 'end':
+            work_queue.enqueue(payload['after'])
+            _work_ready.set()
+    except Exception as e:
+        # No downloads, cloud calls, sleeps or webhooks in the MQTT callback.
+        logging.warning('MQTT message could not be queued (%s); HTTP reconciliation will retry', type(e).__name__)
 
 
 def format_event_recorded_at(start_time):
@@ -329,185 +332,42 @@ def format_event_recorded_at(start_time):
         return f"start_time={start_time}"
 
 
-def get_max_retries_for_event(event_data):
-    """
-    Return max retry attempts based on event duration.
-    Long events are more likely to hit systematic Frigate clip assembly bugs
-    that don't resolve with more retries, so we give up faster.
-    """
-    end_time = event_data.get('end_time') or 0
-    start_time = event_data.get('start_time') or 0
-    duration_sec = end_time - start_time
-    if duration_sec > 3 * 3600:       # > 3 hours
-        return 3   # 3 retries × 10 min = 30 min total wait
-    elif duration_sec > 1 * 3600:     # > 1 hour
-        return 10  # 10 retries × 10 min = 100 min total wait
-    return MAX_RETRY_ATTEMPTS
-
-
 def handle_single_event(event_data, skip_wait=False, online=None):
-    """
-    Handles a single event. Uploads the video to Google Drive if available and updates the database.
-    :param event_data:
-    :param skip_wait: If True, skip the 5-second wait (useful for retrying old events).
-    :param online: Tri-state. If True/False, skip the per-event internet() check and use
-        the provided value (callers in batch jobs should pre-check once). If None, fall
-        back to calling internet() inline (used by the MQTT single-event path).
-    :return: bool. False if an upload was attempted in this call and failed for
-        potentially-network reasons (caller may want to re-check connectivity).
-        True otherwise (skipped, succeeded, hard-fail like ClipNotAvailable, etc.).
-    """
-    event_id = event_data['id']
-    end_time = event_data['end_time']
-    has_clip = event_data['has_clip']
-
-    start_time = event_data['start_time']
-    recorded_at = format_event_recorded_at(start_time)
-    event_max_retries = get_max_retries_for_event(event_data)
-    duration_sec = int((end_time or 0) - start_time)
-
-    if not database.is_event_exists(event_id):
-        database.insert_event(event_id, start_time)
-
-    # Duration filter: skip events that exceed SKIP_EVENTS_LONGER_THAN_SECONDS.
-    # Checked here so it applies on both the MQTT path and the retry-loop path,
-    # and before any clip-roundtrip to Frigate (the `/clip.mp4` endpoint can
-    # hang for minutes assembling long clips — exactly the case we want to skip).
-    if (
-        SKIP_EVENTS_LONGER_THAN_SECONDS > 0
-        and end_time is not None
-        and (end_time - start_time) > SKIP_EVENTS_LONGER_THAN_SECONDS
-    ):
-        if database.select_retry(event_id) != 0:
-            duration_sec_actual = int(end_time - start_time)
-            logging.warning(
-                f"Skipping event {event_id} (recorded {recorded_at}): duration "
-                f"{duration_sec_actual}s exceeds SKIP_EVENTS_LONGER_THAN_SECONDS="
-                f"{SKIP_EVENTS_LONGER_THAN_SECONDS}s. Marking as non-retriable."
-            )
-            database.update_event_retry(
-                event_id, 0, last_error_kind=google_drive.ERR_EVENT_TOO_LONG
-            )
-        else:
-            logging.debug(
-                f"Event {event_id} already marked non-retriable (duration filter). Skipping."
-            )
-        return True
-
-    if online is None:
-        online = internet()
-
-    if end_time is not None and has_clip is True and online is True:
-        if database.select_retry(event_id) == 0:
-            logging.debug(f"Event {event_id} is marked as non-retriable. Skipping upload.")
-        else:
-            uploaded_status = database.select_event_uploaded(event_id)
-            if uploaded_status == 0 or uploaded_status is None:
-                # Wait a few seconds to give Frigate time to finish writing the file to disk
-                if not skip_wait:
-                    logging.debug("Waiting 5 seconds for Frigate to finalize the clip...")
-                    time.sleep(5)
-                logging.info(f"Starting upload for event {event_id} (recorded {recorded_at})...")
-                try:
-                    success, error_kind = google_drive.upload_to_google_drive(event_data, FRIGATE_URL)
-                except ClipNotAvailableError as e:
-                    logging.warning(
-                        f"Clip for event {event_id} (recorded {recorded_at}) no longer available on Frigate. "
-                        f"Removing from database. Reason: {e}"
-                    )
-                    database.delete_event(event_id)
-                    return True
-                except ClipTooLargeError as e:
-                    logging.warning(
-                        f"Skipping clip for event {event_id} (recorded {recorded_at}). "
-                        f"Reason: {e} Marking as non-retriable."
-                    )
-                    database.update_event_retry(event_id, 0, last_error_kind=google_drive.ERR_CLIP_TOO_LARGE)
-                    return True
-                if success:
-                    logging.info(f"Video {event_id} (recorded {recorded_at}) successfully uploaded.")
-                    database.update_event(event_id, 1)
-                else:
-                    database.update_event(event_id, 0, last_error_kind=error_kind)
-                    tries = database.select_tries(event_id)
-                    msg = (
-                        f"Failed to upload video {event_id} (recorded {recorded_at}). "
-                        f"Attempt {tries}/{event_max_retries}."
-                    )
-                    # Notification policy: send AT MOST one Mattermost message per event.
-                    # - tries < 80% of event_max_retries: WARNING (file log only)
-                    # - tries == 80% threshold: ERROR heads-up, but ONLY when it gives
-                    #   meaningful advance warning (>= 2 attempts before give-up). For
-                    #   events with few retries (e.g. long events get only 3) the heads-up
-                    #   would fire back-to-back with the give-up, so it's suppressed.
-                    # - tries >= event_max_retries: file-log only WARNING + the rich
-                    #   give-up card below. The card IS the Mattermost notification, so we
-                    #   deliberately avoid an extra plain ERROR line going to Mattermost.
-                    warning_threshold = max(1, int(event_max_retries * 0.8))
-                    heads_up_has_lead_time = (event_max_retries - warning_threshold) >= 2
-                    if tries >= event_max_retries:
-                        logging.warning(
-                            f"Giving up on event {event_id} (recorded {recorded_at}) "
-                            f"after {tries} failed attempts. Marked as non-retriable. "
-                            f"No further upload attempts will be made for this event."
-                        )
-                        # Preserve the most recent error category when permanently
-                        # marking the event non-retriable.
-                        database.update_event_retry(event_id, 0, last_error_kind=error_kind)
-
-                        # Notify Mattermost with details so the user can grab the clip manually
-                        if duration_sec >= 3600:
-                            duration_str = f"{duration_sec // 3600}h {duration_sec % 3600 // 60}m {duration_sec % 60}s"
-                        elif duration_sec >= 60:
-                            duration_str = f"{duration_sec // 60}m {duration_sec % 60}s"
-                        else:
-                            duration_str = f"{duration_sec}s"
-
-                        camera = event_data.get('camera', 'unknown')
-                        label = event_data.get('label', 'unknown')
-                        clip_url = f"{FRIGATE_URL}/api/events/{event_id}/clip.mp4"
-                        snapshot_url = f"{FRIGATE_URL}/api/events/{event_id}/snapshot.jpg"
-
-                        mm_text = (
-                            f"| Metric | Value |\n"
-                            f"|---|---|\n"
-                            f"| **Event ID** | `{event_id}` |\n"
-                            f"| **Camera** | {camera} |\n"
-                            f"| **Label** | {label} |\n"
-                            f"| **Recorded** | {recorded_at} |\n"
-                            f"| **Duration** | {duration_str} |\n"
-                            f"| **Failed attempts** | {tries} |\n"
-                            f"| **Clip URL** | [{clip_url}]({clip_url}) |\n"
-                            f"| **Snapshot URL** | [{snapshot_url}]({snapshot_url}) |\n\n"
-                            f"This event has been marked as non-retriable. "
-                            f"You can try downloading the clip manually before it expires on Frigate."
-                        )
-                        send_mattermost_notification(
-                            title=":warning: Upload permanently failed — manual action required",
-                            text=mm_text,
-                            color="#ffae42"
-                        )
-                    elif tries == warning_threshold and heads_up_has_lead_time:
-                        logging.error(
-                            f"{msg} Heads-up: will give up at {event_max_retries} attempts."
-                        )
-                    else:
-                        logging.warning(msg)
-                    # Upload was attempted and failed — possibly network related.
-                    # Signal caller so it can re-check connectivity before continuing.
-                    return False
-            else:
-                logging.debug(f"Event {event_id} already uploaded. Skipping...")
+    work_queue.enqueue(event_data)
+    _work_ready.set()
     return True
 
 
-# --- Edge-triggered Frigate-reachability notifications -----------------------
-# Module-level state to avoid spamming Mattermost while Frigate stays down.
-# A notification is sent ONCE when Frigate transitions reachable -> unreachable
-# and ONCE when it recovers. While the state is unchanged, no notification.
-_frigate_unreachable_since = None  # datetime when the outage was first detected
+def upload_worker():
+    while True:
+        try:
+            jobs = work_queue.due()
+            for job in jobs:
+                event_id = job['event_id']
+                try:
+                    event = json.loads(job['metadata']) if job['metadata'] else fetch_event(FRIGATE_URL, event_id)
+                    if event.get('end_time') is None:
+                        work_queue.defer(event_id, 60)
+                        continue
+                    # Save metadata before the original Frigate event can expire.
+                    work_queue.enqueue(event)
+                    with google_drive.upload_lock:
+                        segmented_upload.step(event, FRIGATE_URL, google_drive)
+                except (EventNotFoundError, segmented_upload.SourceMissing) as e:
+                    work_queue.failed(event_id, str(e) if isinstance(e, segmented_upload.SourceMissing) else 'event_missing', missing=True)
+                except Exception as e:
+                    kind = 'drive_http_' + str(e.resp.status) if isinstance(e, google_drive.HttpError) else type(e).__name__
+                    if isinstance(e, google_drive.HttpError) and e.resp.status == 404:
+                        google_drive._folder_id_cache.clear()
+                    work_queue.failed(event_id, kind)
+                    logging.warning('Upload deferred for %s (%s); retry remains enabled', event_id, kind)
+        except Exception:
+            logging.exception('Upload worker cycle failed; retrying')
+        _work_ready.wait(5)
+        _work_ready.clear()
 
-# Program start time for uptime tracking
+
+_frigate_unreachable_since = None
 _PROGRAM_START_TIME = None
 
 
@@ -564,84 +424,28 @@ def _notify_frigate_recovered_once():
 
 
 def handle_all_events():
-    logging.info("=== handle_all_events started ===")
-
-    # One internet check at job start instead of one per event. Uploads will fail
-    # naturally if connectivity drops mid-loop; we re-check after each failure below.
-    online = internet()
-    if not online:
-        logging.warning("No internet connectivity at handle_all_events start. Skipping job.")
-        logging.info("=== handle_all_events completed (skipped, offline) ===")
-        return
-
-    # One Frigate reachability check at job start. fetch_all_events would
-    # eventually return None on its own, but only after several long retries.
-    # Skipping early keeps logs clean and the job slot free.
-    if not check_frigate_reachable(FRIGATE_URL):
-        logging.warning("Frigate not reachable at handle_all_events start. Skipping job.")
-        _notify_frigate_unreachable_once()
-        logging.info("=== handle_all_events completed (skipped, Frigate unreachable) ===")
-        return
-    # Frigate is reachable; if we previously notified about an outage, send recovery.
-    _notify_frigate_recovered_once()
-
-    latest_start_time = database.get_latest_event_start_time()
-    logging.debug(f"Fetching all events from Frigate since {latest_start_time}...")
-    all_events = fetch_all_events(FRIGATE_URL, after=latest_start_time, batch_size=100)
-
+    # Reconcile the whole local retention window: MAX(start_time) misses objects
+    # that started earlier and only ended while MQTT was disconnected.
+    after = time.time() - database.DB_RETENTION_DAYS * 86400
+    all_events = fetch_all_events(FRIGATE_URL, after=after, batch_size=500)
     if all_events is None:
-        # This indicates a connection error after retries
-        logging.error("Failed to fetch events from Frigate after multiple retries.")
-    elif not all_events:
-        # This is the normal case where there are no new events
-        logging.info("No new events to process from Frigate API.")
-    else:
-        # Process the fetched events
-        logging.info(f"Received {len(all_events)} new events from Frigate API.")
-        i = 1
-        for event in all_events:
-            logging.debug(f"Handling event #{i}: {event['id']} in handle_all_events")
-            ok = handle_single_event(event, online=True)
-            if ok is False and not internet():
-                logging.warning(
-                    f"Lost internet connectivity after event {event.get('id')}. "
-                    f"Aborting handle_all_events loop after {i} of {len(all_events)} events."
-                )
-                break
-            i = i + 1
-        logging.info(f"=== handle_all_events completed. Processed {i - 1} new events. ===")
-
-
-# MQTT Reconnect settings
-FIRST_RECONNECT_DELAY = 1
-RECONNECT_RATE = 2
-MAX_RECONNECT_COUNT = 12
-MAX_RECONNECT_DELAY = 60
+        _notify_frigate_unreachable_once()
+        return
+    _notify_frigate_recovered_once()
+    for event in all_events:
+        work_queue.enqueue(event)
+    _work_ready.set()
+    logging.info('HTTP reconciliation completed: %s event records checked', len(all_events))
 
 
 def on_disconnect(client, userdata, disconnect_flags, rc, properties):
-    logging.info("MQTT disconnected with result code: %s", rc)
-    reconnect_count, reconnect_delay = 0, FIRST_RECONNECT_DELAY
-    while reconnect_count < MAX_RECONNECT_COUNT:
-        logging.info("Reconnecting in %d seconds...", reconnect_delay)
-        time.sleep(reconnect_delay)
-
-        try:
-            client.reconnect()
-            logging.info("Reconnected successfully!")
-            return
-        except Exception as err:
-            logging.error("%s. Reconnect failed. Retrying...", err)
-
-        reconnect_delay *= RECONNECT_RATE
-        reconnect_delay = min(reconnect_delay, MAX_RECONNECT_DELAY)
-        reconnect_count += 1
-    logging.info("Reconnect failed after %s attempts. Exiting...", reconnect_count)
+    logging.warning('MQTT disconnected (%s); automatic reconnection continues', rc)
 
 
 def init_db_and_run_migrations():
     database.init_db()
     database.run_migrations()
+    work_queue.initialize()
 
 
 # Module-level reference to the MQTT client so the healthcheck endpoint can
@@ -667,90 +471,20 @@ def mqtt_handler():
     client.on_connect = on_connect
     client.on_message = on_message
     client.on_disconnect = on_disconnect
+    client.reconnect_delay_set(min_delay=1, max_delay=60)
     _mqtt_client = client
-    client.connect(MQTT_BROKER_ADDRESS, MQTT_PORT, 180)  # 180s keepalive → disconnect detected in ~270s
-    client.loop_forever()
-
-
-def handle_not_uploaded_events():
-    logging.info("=== handle_not_uploaded_events started ===")
-
-    # One internet check at job start. Saves up to (event_count × 3s) timeouts
-    # in case of a full outage. The loop re-checks on individual failures below
-    # to handle the rare race where connectivity drops mid-job.
-    if not internet():
-        logging.warning("No internet connectivity at handle_not_uploaded_events start. Skipping retry loop.")
-        logging.info("=== handle_not_uploaded_events completed (skipped, offline) ===")
-        return
-
-    # One Frigate reachability check at job start. Fails fast (10s) if the
-    # Frigate host is down (LXC restart, network outage, ...). The per-event
-    # check inside the loop still protects against transient busy moments.
-    if not check_frigate_reachable(FRIGATE_URL):
-        logging.warning("Frigate not reachable at handle_not_uploaded_events start. Skipping retry loop.")
-        _notify_frigate_unreachable_once()
-        logging.info("=== handle_not_uploaded_events completed (skipped, Frigate unreachable) ===")
-        return
-    # Frigate is reachable; if we previously notified about an outage, send recovery.
-    _notify_frigate_recovered_once()
-
-    event_ids = database.select_not_uploaded_yet()
-    if not event_ids:
-        logging.info("No pending events to retry.")
-        logging.info("=== handle_not_uploaded_events completed ===")
-        return
-
-    logging.info(f"Found {len(event_ids)} pending events to retry (oldest first).")
-    consecutive_timeouts = 0
-    processed = 0
-    for event_id in event_ids:
-        # Check reachability before every individual event so one slow/busy
-        # moment on Frigate does not abort the entire retry queue.
-        if not check_frigate_reachable(FRIGATE_URL):
-            consecutive_timeouts += 1
-            if consecutive_timeouts >= 3:
-                logging.warning("Frigate unreachable for 3 consecutive events. Aborting retry loop.")
-                break
-            logging.debug(f"Frigate not reachable for event {event_id}, skipping...")
-            continue
-        consecutive_timeouts = 0
-
-        logging.info(f"Retrying event {event_id}...")
+    client.connect_async(MQTT_BROKER_ADDRESS, MQTT_PORT, 60)
+    while True:
         try:
-            event_data = fetch_event(FRIGATE_URL, event_id)
-            ok = handle_single_event(event_data, skip_wait=True, online=True)
-        except EventNotFoundError:
-            logging.warning(f"Event {event_id} no longer exists on Frigate. Removing from database.")
-            database.delete_event(event_id)
-            processed += 1
-            continue
-        except FrigateUnreachableError:
-            logging.warning(f"Frigate became unreachable during retry for event {event_id}. Skipping to next.")
-            continue
-
-        processed += 1
-
-        # Race-condition safety net: an upload failed in this iteration. Verify
-        # internet is still up; if not, abort instead of burning through the
-        # entire backlog with guaranteed-failing uploads.
-        if ok is False and not internet():
-            logging.warning(
-                f"Lost internet connectivity after event {event_id}. "
-                f"Aborting retry loop after {processed} of {len(event_ids)} events."
-            )
-            break
-    logging.info(f"=== handle_not_uploaded_events completed. Retried {processed} of {len(event_ids)} events. ===")
+            client.loop_forever(retry_first_connection=True)
+        except Exception as e:
+            logging.warning('MQTT loop interrupted (%s); restarting in 5 seconds', type(e).__name__)
+        time.sleep(5)
 
 
 def run_every_x_minutes():
-    logging.info("=== Periodic job started ===")
-    logging.info("Step 1/3: Cleaning up old events from database...")
-    database.cleanup_old_events()
-    logging.info("Step 2/3: Retrying old pending events (oldest first)...")
-    handle_not_uploaded_events()
-    logging.info("Step 3/3: Fetching and processing new events from Frigate API...")
     handle_all_events()
-    logging.info("=== Periodic job completed ===")
+    database.cleanup_old_events()
 
 
 def _get_uptime():
@@ -830,17 +564,14 @@ def _check_clip_availability(event_id):
     Returns True if available, False if not (404/400), None on network error.
     """
     try:
-        clip_url = f"{FRIGATE_URL}/api/events/{event_id}/clip.mp4"
-        response = requests.head(clip_url, timeout=10)
-        if response.status_code in (200, 206):
-            return True
-        elif response.status_code in (400, 404):
-            return False
-        else:
-            logging.debug(f"Unexpected status {response.status_code} for clip {event_id}")
+        event = fetch_event(FRIGATE_URL, event_id, retries=1, timeout=10)
+        if not event.get('end_time'):
             return None
-    except (requests.RequestException, Timeout):
-        logging.debug(f"Network error checking clip {event_id}")
+        rows = segmented_upload.recordings(FRIGATE_URL, event['camera'], event['start_time'], event['end_time'])
+        return bool(segmented_upload.make_plan(rows, event['start_time'], event['end_time']))
+    except EventNotFoundError:
+        return False
+    except Exception:
         return None
 
 
@@ -924,10 +655,10 @@ def daily_health_report(scheduler):
 
     # Determine severity
     is_critical = stats["pending_gt_3d"] > 0 or (
-        stats["uploaded_last_24h"] == 0 and stats["pending_total"] > 0
+        stats["uploaded_last_24h"] == 0 and stats.get("pending_retryable", 0) > 0
     )
     is_warning = (not is_critical) and (
-        stats["pending_2d_3d"] > 0 or stats["pending_1d_2d"] > 10
+        stats["pending_2d_3d"] > 0 or stats["pending_1d_2d"] > 10 or not subsystem["mqtt"] or not subsystem["scheduler"] or not subsystem["db"]
     )
 
     if is_critical:
@@ -937,11 +668,11 @@ def daily_health_report(scheduler):
     elif is_warning:
         title = ":warning: Warning – Frigate Uploader"
         color = "#ffae42"
-        headline = "There are events that have been pending for 1–3 days. Please keep an eye on it."
+        headline = "Pending uploads or a subsystem need attention; see details below."
     else:
         title = ":white_check_mark: Frigate Uploader – all good"
         color = "#36a64f"
-        headline = "Daily report: all uploads are running normally."
+        headline = "Daily report: no overdue retryable uploads. Confirmed source-unavailable records are listed separately below."
 
     oldest = (
         f"`{stats['oldest_pending_event_id']}` (**{stats['oldest_pending_age_days']} days** old)"
@@ -971,13 +702,13 @@ def daily_health_report(scheduler):
         f"| Uploaded last 24h | **{stats['uploaded_last_24h']}** |\n"
         f"| Pending total | **{stats['pending_total']}** |\n"
         f"| thereof retryable (action required) | **{stats.get('pending_retryable', 0)}** |\n"
-        f"| thereof non-retriable (gave up) | **{stats.get('pending_non_retryable', 0)}** |\n"
+        f"| thereof confirmed source unavailable | **{stats.get('pending_non_retryable', 0)}** |\n"
         f"| thereof under 1 day (normal) | {stats['pending_lt_1d']} |\n"
         f"| thereof 1–2 days | {stats['pending_1d_2d']} |\n"
         f"| thereof 2–3 days | {stats['pending_2d_3d']} |\n"
         f"| thereof **over 3 days** | **{stats['pending_gt_3d']}** |\n"
         f"| Oldest retryable event | {oldest} |\n"
-        f"| Total uploaded ever | {stats['total_uploaded']} |\n"
+        f"| Uploaded events retained in local DB | {stats['total_uploaded']} |\n"
     )
 
     # Add clip availability statistics
@@ -1057,6 +788,9 @@ def main():
     logging.debug("Initializing database...")
     init_db_and_run_migrations()
 
+    global _upload_worker
+    _upload_worker = threading.Thread(target=upload_worker, name='upload-worker', daemon=True)
+    _upload_worker.start()
     mqtt_thread = threading.Thread(target=mqtt_handler)
     mqtt_thread.daemon = True
     mqtt_thread.start()
@@ -1086,6 +820,7 @@ def main():
         db_path=database.DB_PATH,
         scheduler=scheduler,
         mqtt_is_connected=_mqtt_is_connected,
+        worker_is_alive=lambda: bool(_upload_worker and _upload_worker.is_alive()),
         status_token=HEALTHCHECK_TOKEN or None,
     )
     health_server = None

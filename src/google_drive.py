@@ -108,7 +108,7 @@ def get_google_service():
             logging.info("Using service account without impersonation")
         
         # Build and return the service
-        return build('drive', 'v3', credentials=credentials, cache_discovery=False)
+        return build('drive', 'v3', credentials=credentials, cache_discovery=False, static_discovery=True)
         
     except Exception as e:
         error_msg = f"Error initializing Google Drive service: {str(e)}"
@@ -175,7 +175,7 @@ def find_or_create_folder(name, parent_id=None):
                 return folder_id
 
         except (HttpError, socket.timeout) as error:
-            logging.error(f"An error occurred while finding or creating folder '{name}': {error}")
+            logging.warning(f"An error occurred while finding or creating folder '{name}': {error}")
             return None
 
 

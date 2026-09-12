@@ -17,10 +17,10 @@ class MattermostHandler(logging.Handler):
             log_entry = self.format(record)
             prefixed_log_entry = f"{MATTERMOST_PREFIX} {log_entry}"
             payload = {"text": prefixed_log_entry}
-            response = requests.post(self.webhook_url, json=payload)
+            response = requests.post(self.webhook_url, json=payload, timeout=10)
             response.raise_for_status()
         except Exception as e:
-            logging.error(f"Failed to send log to Mattermost: {e}")
+            logging.warning(f"Failed to send log to Mattermost: {e}")
 
 
 def send_mattermost_notification(title, text, color="#36a64f", webhook_url=None):
@@ -51,5 +51,5 @@ def send_mattermost_notification(title, text, color="#36a64f", webhook_url=None)
         response.raise_for_status()
         return True
     except Exception as e:
-        logging.error(f"Failed to send notification to Mattermost: {e}")
+        logging.warning(f"Failed to send notification to Mattermost: {e}")
         return False
