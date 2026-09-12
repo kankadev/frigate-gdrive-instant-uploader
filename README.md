@@ -36,8 +36,10 @@ build the committed source without updating Python or system packages:
 
 ```bash
 base_image=$(docker inspect -f '{{.Image}}' frigate-gdrive-instant-uploader)
+base_tag="frigate-uploader:runtime-${base_image#sha256:}"
+docker tag "$base_image" "$base_tag"
 revision=$(git rev-parse HEAD)
-docker build -f Dockerfile.runtime --build-arg RUNTIME_BASE_IMAGE="$base_image" \
+docker build -f Dockerfile.runtime --build-arg RUNTIME_BASE_IMAGE="$base_tag" \
   --label org.opencontainers.image.revision="$revision" -t frigate-uploader:verified .
 ```
 

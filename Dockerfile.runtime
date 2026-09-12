@@ -1,6 +1,6 @@
 # Rebuild application code using an already verified local runtime image.
-# Supply its immutable image ID with --build-arg RUNTIME_BASE_IMAGE=sha256:...
-ARG RUNTIME_BASE_IMAGE
+# Tag the verified image locally and supply that reference with --build-arg.
+ARG RUNTIME_BASE_IMAGE=frigate-uploader:runtime-base
 FROM ${RUNTIME_BASE_IMAGE}
 WORKDIR /app
 RUN command -v ffprobe && rm -f /app/.env
