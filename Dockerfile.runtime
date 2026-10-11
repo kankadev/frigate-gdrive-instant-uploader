@@ -4,7 +4,9 @@ ARG RUNTIME_BASE_IMAGE=frigate-uploader:runtime-base
 FROM ${RUNTIME_BASE_IMAGE}
 WORKDIR /app
 RUN command -v ffprobe && rm -f /app/.env
-COPY main.py requirements.txt ./
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt && pip check
+COPY main.py ./
 COPY src/ ./src/
 COPY db/migrations/ ./db/migrations/
 COPY tests/ ./tests/

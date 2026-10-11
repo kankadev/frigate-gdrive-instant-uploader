@@ -32,7 +32,10 @@ logs and downloaded video parts are excluded from the Docker build context.
 They remain in the existing runtime bind mounts.
 
 For an application-only redeployment, retain the verified local runtime image and
-build the committed source without updating Python or system packages:
+build the committed source while retaining the Python interpreter and system packages.
+The runtime build installs the pinned `requirements.txt` and runs `pip check`, so
+dependency security updates also take effect on this build path. Existing compatible
+transitive packages are retained; inspect the resolved package diff before deployment:
 
 ```bash
 base_image=$(docker inspect -f '{{.Image}}' frigate-gdrive-instant-uploader)
