@@ -72,43 +72,43 @@ def render(s, subsystems):
     critical = bool(broken) or (s['active'] > s['gap_checks'] and s['uploaded_24h'] == 0)
     warning = bool(s['review'] or s['active_errors'] or s['new_gaps_24h'])
     ok = not critical and not warning
-    level = 'KRITISCH' if critical else ('Handlungsbedarf' if warning else 'Betrieb aktiv')
+    level = 'CRITICAL' if critical else ('Action required' if warning else 'Operational')
     title = 'Frigate Uploader – ' + level
     color = '#d50000' if critical else ('#ffae42' if warning else '#36a64f')
     text = (
-        '**Aktueller Betrieb**\n\n'
-        f'- Vollständig archivierte Ereignisse in 24 Stunden: **{s["uploaded_24h"]}**\n'
-        f'- In automatischer Bearbeitung: **{s["active"]}** '
-        f'(davon **{s["gap_checks"]}** in Quelllücken-Bestätigung)\n'
-        f'- Noch nicht archivierte Teile aktiver Ereignisse: **{s["open_parts"]}**\n'
-        f'- Prüfung/Reparatur erforderlich: **{s["review"]}**\n'
-        f'- Alter des ältesten aktiven/pruefbedürftigen Ereignisses: **{s["oldest_active_days"]:.1f} Tage**\n'
-        f'- Ereignisse mit mindestens einem erfassten Fehler in 24 Stunden: **{s["errors_24h"]}** '
-        '(einschließlich inzwischen behobener Fehler; keine Versuchsanzahl)\n'
+        '**Current operations**\n\n'
+        f'- Events fully archived in the last 24 hours: **{s["uploaded_24h"]}**\n'
+        f'- Events being processed automatically: **{s["active"]}** '
+        f'(including **{s["gap_checks"]}** awaiting source-gap confirmation)\n'
+        f'- Unarchived parts of active events: **{s["open_parts"]}**\n'
+        f'- Events requiring review or repair: **{s["review"]}**\n'
+        f'- Age of oldest active or review-required event: **{s["oldest_active_days"]:.1f} days**\n'
+        f'- Events with at least one recorded failure in the last 24 hours: **{s["errors_24h"]}** '
+        '(includes resolved failures; not a retry-attempt count)\n'
     )
     if s['last_success']:
         from datetime import datetime, timezone
         stamp = datetime.fromtimestamp(s['last_success'], timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
-        text += f'- Letztes vollständig archiviertes Ereignis: **{stamp}**\n'
-    text += '\n**Aktuelle Fehlerursachen**\n\n'
+        text += f'- Last fully archived event: **{stamp}**\n'
+    text += '\n**Current failure categories**\n\n'
     if s['active_errors']:
         for kind, count in s['active_errors']:
-            text += f'- `{kind}`: **{count} Ereignisse**\n'
+            text += f'- `{kind}`: **{count} events**\n'
     else:
-        text += '- Keine offenen Fehlerursachen erfasst.\n'
+        text += '- No unresolved failures recorded.\n'
     text += (
-        '\nAutomatische Bearbeitung bedeutet nicht, dass ein Export bereits geprüft ist. '
-        'Nach drei gleichen deterministischen Fehlern ist eine gezielte Prüfung nötig; '
-        'vorübergehende Verbindungsfehler werden weiter mit Abstand versucht.\n'
-        '\n**Historische Quelllücken – getrennt vom laufenden Rückstand**\n\n'
-        f'- Abgeschlossen mit fehlenden Quellabschnitten: **{s["historical"]} Ereignisse**\n'
-        f'- Davon teilweise archiviert: **{s["historical_with_parts"]} Ereignisse**, '
-        f'**{s["historical_parts"]} gespeicherte Teile**\n'
-        f'- In den letzten 24 Stunden neu abgeschlossen mit Lücken: **{s["new_gaps_24h"]}**\n'
-        '- Historische Lücken werden nicht als laufende Wiederholungen gezählt. '
-        'Gesicherte Restaufnahmen bleiben erhalten; teilweise archiviert ist nicht vollständig.\n'
-        '\n**Dienststatus**\n\n'
+        '\nAutomatic processing does not mean an export has already been verified. '
+        'Three consecutive identical deterministic failures require targeted review; '
+        'transient connection failures continue to retry with backoff.\n'
+        '\n**Historical source gaps – separate from the active backlog**\n\n'
+        f'- Closed with missing source intervals: **{s["historical"]} events**\n'
+        f'- Of these, partially archived: **{s["historical_with_parts"]} events**, '
+        f'**{s["historical_parts"]} archived parts**\n'
+        f'- Newly closed with gaps in the last 24 hours: **{s["new_gaps_24h"]}**\n'
+        '- Historical gaps are not counted as active retries. '
+        'Rescued recordings are preserved; partially archived does not mean complete.\n'
+        '\n**Subsystem status**\n\n'
     )
     for name, healthy in subsystems.items():
-        text += f'- {name}: {"OK" if healthy else "PRÜFEN"}\n'
+        text += f'- {name}: {"OK" if healthy else "CHECK"}\n'
     return title, text, color, ok

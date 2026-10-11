@@ -300,7 +300,7 @@ If source coverage has shrunk, remaining media can be archived without rewriting
 
 Transient connection and rate-limit errors retain exponential backoff. Three consecutive deterministic errors move a job to `review`; metadata rediscovery does not reset that state. Review requires a targeted diagnosis before explicitly re-enabling the affected job. Existing confirmed files and Drive IDs must be preserved.
 
-The German daily report separates active work, review-required errors, source confirmations and historical gaps. Error counts refer to events, not retry attempts. Newly confirmed gaps are highlighted for 24 hours; older gaps alone do not produce a current outage alarm. The report performs no media downloads. `/health` remains a liveness check; `/status` additionally exposes aggregate `operations` data. Neither endpoint proves full media integrity.
+The English daily report separates active work, review-required errors, source confirmations and historical gaps. Error counts refer to events, not retry attempts. Newly confirmed gaps are highlighted for 24 hours; older gaps alone do not produce a current outage alarm. The report performs no media downloads. `/health` remains a liveness check; `/status` additionally exposes aggregate `operations` data. Neither endpoint proves full media integrity.
 
 Schema migration is additive and idempotent. Before deployment, create a consistent SQLite backup and retain the previous image and configuration. Once new uploads have occurred, never restore an old database over the current one. A downgrade to an older worker requires reviewing the new partial/review states; prefer a forward fix preserving current IDs and archived files.
 

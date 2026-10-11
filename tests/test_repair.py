@@ -145,7 +145,7 @@ class RepairTests(unittest.TestCase):
     def test_worker_failure_is_critical_even_without_backlog(self):
         q.complete('test-event')
         title,_,_,ok=reporting.render(reporting.collect(self.db),dict(upload_worker=False))
-        self.assertFalse(ok);self.assertIn('KRITISCH',title)
+        self.assertFalse(ok);self.assertIn('CRITICAL',title)
 
     def test_missing_database_stats_raise_instead_of_zero_success(self):
         empty=str(Path(self.temp.name)/'empty.db')
@@ -205,5 +205,32 @@ class RepairTests(unittest.TestCase):
             HEALTH_REPORT_ONLY_ON_ISSUES=False,send_mattermost_notification=send)
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'main.py','exec'),ns)
         ns['daily_health_report'](None)
-        self.assertIn('KRITISCH',send.call_args.kwargs['title'])
+        self.assertIn('CRITICAL',send.call_args.kwargs['title'])
         self.assertNotIn('mqtt_status',send.call_args.kwargs['text'])
+
+    def test_public_report_uses_english_in_all_severity_branches(self):
+        q.complete('test-event')
+        stats=reporting.collect(self.db)
+        for changes,systems,label in [({},dict(upload_worker=True),'Operational'),
+                ({'review':1},dict(upload_worker=True),'Action required'),
+                ({},dict(upload_worker=False),'CRITICAL')]:
+            with self.subTest(label=label):
+                title,text,_,_=reporting.render({**stats,**changes},systems)
+                self.assertIn(label,title)
+                self.assertIn('Current operations',text)
+                self.assertIn('Historical source gaps',text)
+                self.assertIn('Subsystem status',text)
+                for previous in ['Aktueller','Historische','Ereignisse','PRÜFEN','Handlungsbedarf']:
+                    self.assertNotIn(previous,title+text)
+
+    def test_report_statistics_failure_notification_uses_english(self):
+        import ast
+        tree=ast.parse((Path(__file__).parents[1]/'main.py').read_text())
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='daily_health_report')
+        send=Mock();reports=Mock();reports.collect.side_effect=sqlite3.DatabaseError('unavailable')
+        ns=dict(reporting=reports,database=database,logging=Mock(),
+            HEALTH_REPORT_ONLY_ON_ISSUES=True,send_mattermost_notification=send)
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'main.py','exec'),ns)
+        ns['daily_health_report'](None)
+        self.assertIn('Status check failed',send.call_args.kwargs['title'])
+        self.assertIn('Status is unknown',send.call_args.kwargs['text'])

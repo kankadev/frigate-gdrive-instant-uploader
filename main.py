@@ -643,8 +643,8 @@ def daily_health_report(scheduler):
         title, text, color, is_ok = reporting.render(stats, subsystem)
     except Exception:
         title, text, color, is_ok = (
-            ':rotating_light: Frigate Uploader – Statusprüfung fehlgeschlagen',
-            'Statistiken konnten nicht zuverlässig gelesen werden. Zustand unbekannt; Logs prüfen.',
+            ':rotating_light: Frigate Uploader – Status check failed',
+            'Statistics could not be read reliably. Status is unknown; check the logs.',
             '#d50000', False)
         logging.warning('Daily report statistics unavailable')
     if is_ok and HEALTH_REPORT_ONLY_ON_ISSUES:
