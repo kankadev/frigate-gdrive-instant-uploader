@@ -68,9 +68,9 @@ def collect(db_path, now=None):
 
 def render(s, subsystems):
     broken = [name for name, ok in subsystems.items() if not ok]
-    # Old confirmed gaps never cause a permanent current outage alarm.
+    # Confirmed source gaps are informational, including newly confirmed gaps.
     critical = bool(broken) or (s['active'] > s['gap_checks'] and s['uploaded_24h'] == 0)
-    warning = bool(s['review'] or s['active_errors'] or s['new_gaps_24h'])
+    warning = bool(s['review'] or s['active_errors'])
     ok = not critical and not warning
     level = 'CRITICAL' if critical else ('Action required' if warning else 'Operational')
     title = 'Frigate Uploader – ' + level
@@ -100,12 +100,13 @@ def render(s, subsystems):
         '\nAutomatic processing does not mean an export has already been verified. '
         'Three consecutive identical deterministic failures require targeted review; '
         'transient connection failures continue to retry with backoff.\n'
-        '\n**Historical source gaps – separate from the active backlog**\n\n'
+        '\n**Historical source gaps – information only**\n\n'
         f'- Closed with missing source intervals: **{s["historical"]} events**\n'
         f'- Of these, partially archived: **{s["historical_with_parts"]} events**, '
         f'**{s["historical_parts"]} archived parts**\n'
         f'- Newly closed with gaps in the last 24 hours: **{s["new_gaps_24h"]}**\n'
-        '- Historical gaps are not counted as active retries. '
+        '- Confirmed historical gaps do not require action and do not raise warnings, '
+        'even when newly confirmed. They are not counted as active retries. '
         'Rescued recordings are preserved; partially archived does not mean complete.\n'
         '\n**Subsystem status**\n\n'
     )

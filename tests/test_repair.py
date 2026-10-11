@@ -147,6 +147,32 @@ class RepairTests(unittest.TestCase):
         title,_,_,ok=reporting.render(reporting.collect(self.db),dict(upload_worker=False))
         self.assertFalse(ok);self.assertIn('CRITICAL',title)
 
+    def test_newly_confirmed_gaps_are_informational(self):
+        self.prepare_partial();q.finish_with_gaps('test-event')
+        stats=reporting.collect(self.db)
+        self.assertEqual(stats['new_gaps_24h'],1)
+        title,text,color,ok=reporting.render(stats,dict(upload_worker=True))
+        self.assertTrue(ok)
+        self.assertIn('Operational',title)
+        self.assertEqual(color,'#36a64f')
+        self.assertIn('Historical source gaps – information only',text)
+        self.assertIn('Newly closed with gaps in the last 24 hours: **1**',text)
+        self.assertIn('do not require action',text)
+
+    def test_historical_gaps_do_not_hide_current_problems(self):
+        self.prepare_partial();q.finish_with_gaps('test-event')
+        stats=reporting.collect(self.db)
+        cases=[({'review':1},True,'Action required','#ffae42'),
+               ({'active_errors':[('source_timeout',1)]},True,'Action required','#ffae42'),
+               ({},False,'CRITICAL','#d50000'),
+               ({'active':1,'gap_checks':0,'uploaded_24h':0},True,'CRITICAL','#d50000')]
+        for changes,healthy,label,expected_color in cases:
+            with self.subTest(changes=changes,healthy=healthy):
+                title,_,color,ok=reporting.render({**stats,**changes},dict(upload_worker=healthy))
+                self.assertFalse(ok)
+                self.assertIn(label,title)
+                self.assertEqual(color,expected_color)
+
     def test_missing_database_stats_raise_instead_of_zero_success(self):
         empty=str(Path(self.temp.name)/'empty.db')
         sqlite3.connect(empty).close()
