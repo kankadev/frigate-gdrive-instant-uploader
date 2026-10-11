@@ -66,7 +66,7 @@ def _check_db(db_path: str, timeout: float = 1.0) -> tuple[bool, Optional[str]]:
     try:
         conn = sqlite3.connect(db_path, timeout=timeout)
         try:
-            conn.execute("SELECT 1").fetchone()
+            conn.execute("SELECT event_id FROM events LIMIT 1").fetchone()
             return True, None
         finally:
             conn.close()
@@ -202,6 +202,8 @@ class _SilentHandler(BaseHTTPRequestHandler):
         # filters to non-sensitive aggregates (counts and kinds only).
         try:
             stats = database.get_health_stats()
+            from src import reporting
+            operational = reporting.collect(s.db_path)
         except Exception as e:
             logging.warning(f"Healthcheck /status failed to load stats: {e}")
             self._send_json(503, {"status": "stats_unavailable"})
@@ -210,6 +212,8 @@ class _SilentHandler(BaseHTTPRequestHandler):
         db_ok, _ = _check_db(s.db_path)
         scheduler_ok = _check_scheduler(s.scheduler)
         mqtt_ok = _check_mqtt(s.mqtt_is_connected)
+
+        worker_ok = _check_mqtt(s.worker_is_alive) if s.worker_is_alive else True
 
         # Project a SAFE subset of the stats. Specifically we strip
         # `oldest_pending_event_id` (an event id can leak surveillance
@@ -230,13 +234,15 @@ class _SilentHandler(BaseHTTPRequestHandler):
         }
 
         self._send_json(200, {
-            "status": "ok",
+            "status": "ok" if db_ok and scheduler_ok and worker_ok and mqtt_ok else "attention_required",
             "subsystems": {
                 "db": db_ok,
                 "scheduler": scheduler_ok,
                 "mqtt": mqtt_ok,
+                "upload_worker": worker_ok,
             },
             "stats": safe_stats,
+            "operations": operational,
         })
 
     # ------------------------------------------------------------------ verbs

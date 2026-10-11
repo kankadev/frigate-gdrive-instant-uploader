@@ -291,3 +291,17 @@ FROM events WHERE uploaded = 0 ORDER BY created ASC LIMIT 20;
   A clip recorded on May 14 will always land in `/UPLOAD_DIR/2026/05/14/`, even if uploaded later.
 - Files manually deleted in Google Drive are **not re-uploaded**, because the SQLite DB still records them as `uploaded=1`.
 - Confirmed missing-source records remain in the DB; unavailable does not mean successfully uploaded.
+
+## Recovery and reporting
+
+The uploader keeps original part boundaries and expected duration. New plans also retain their source intervals. Downloads are checked for a finite positive duration and a video stream. Very short exports use a bounded expanded window; a failed ordinary export may use that alternate window once.
+
+If source coverage has shrunk, remaining media can be archived without rewriting the original expectation or an assigned Drive identity. Such parts have `coverage=partial_pending`, keep the observed source intervals and exported duration, and remain under verification. After a successful source recheck at least one hour later, their coverage becomes `partial`. The event finishes as `state=partial`, with `events.uploaded=0`: a partial archive is never reported as full success. Completely absent parts follow the same confirmation interval. If additional source intervals reappear, the job requires review instead of replacing rescued bytes.
+
+Transient connection and rate-limit errors retain exponential backoff. Three consecutive deterministic errors move a job to `review`; metadata rediscovery does not reset that state. Review requires a targeted diagnosis before explicitly re-enabling the affected job. Existing confirmed files and Drive IDs must be preserved.
+
+The German daily report separates active work, review-required errors, source confirmations and historical gaps. Error counts refer to events, not retry attempts. Newly confirmed gaps are highlighted for 24 hours; older gaps alone do not produce a current outage alarm. The report performs no media downloads. `/health` remains a liveness check; `/status` additionally exposes aggregate `operations` data. Neither endpoint proves full media integrity.
+
+Schema migration is additive and idempotent. Before deployment, create a consistent SQLite backup and retain the previous image and configuration. Once new uploads have occurred, never restore an old database over the current one. A downgrade to an older worker requires reviewing the new partial/review states; prefer a forward fix preserving current IDs and archived files.
+
+Run isolated regression tests with `python -m unittest discover -s tests -v`. They use synthetic media and temporary databases; live acceptance should verify remote sizes/checksums and preserved pre-deployment success records separately.

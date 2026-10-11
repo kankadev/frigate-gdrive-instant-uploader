@@ -431,7 +431,8 @@ def get_health_stats(db_path=DB_PATH):
         )
         stats["pending_error_kinds"] = [(row[0], row[1]) for row in cursor.fetchall()]
     except Exception as e:
-        logging.error(f"Error collecting health stats: {e}")
+        logging.error("Error collecting health stats")
+        raise
     finally:
         conn.close()
     return stats

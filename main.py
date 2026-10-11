@@ -72,7 +72,7 @@ from dotenv import load_dotenv
 import paho.mqtt.client as mqtt
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from src import database, google_drive, work_queue, segmented_upload
+from src import database, google_drive, work_queue, segmented_upload, reporting
 from src.frigate_api import fetch_all_events, fetch_event, check_frigate_reachable, EventNotFoundError, ClipNotAvailableError, ClipTooLargeError, FrigateUnreachableError
 from src.google_drive import cleanup_old_files_on_drive, service
 from src.healthcheck import HealthState, start_healthcheck_server
@@ -353,14 +353,18 @@ def upload_worker():
                     work_queue.enqueue(event)
                     with google_drive.upload_lock:
                         segmented_upload.step(event, FRIGATE_URL, google_drive)
-                except (EventNotFoundError, segmented_upload.SourceMissing) as e:
-                    work_queue.failed(event_id, str(e) if isinstance(e, segmented_upload.SourceMissing) else 'event_missing', missing=True)
+                except EventNotFoundError:
+                    work_queue.failed(event_id, 'event_metadata_missing',
+                        detail='Event metadata unavailable; this does not prove media absence', deterministic=True)
+                except segmented_upload.SourceMissing as e:
+                    work_queue.failed(event_id, str(e), missing=True)
                 except Exception as e:
-                    kind = 'drive_http_' + str(e.resp.status) if isinstance(e, google_drive.HttpError) else type(e).__name__
+                    kind, detail, deterministic = reporting.classify_error(e)
                     if isinstance(e, google_drive.HttpError) and e.resp.status == 404:
                         google_drive._folder_id_cache.clear()
-                    work_queue.failed(event_id, kind)
-                    logging.warning('Upload deferred for %s (%s); retry remains enabled', event_id, kind)
+                    work_queue.failed(event_id, kind, detail=detail, deterministic=deterministic)
+                    # Safe detail only: third-party exceptions may contain URLs/tokens.
+                    logging.warning('Upload deferred for %s (%s): %s', event_id, kind, detail)
         except Exception:
             logging.exception('Upload worker cycle failed; retrying')
         _work_ready.wait(5)
@@ -537,7 +541,7 @@ def _get_subsystem_status(scheduler):
     # DB health: try a quick query
     try:
         conn = sqlite3.connect(database.DB_PATH, timeout=2)
-        conn.execute("SELECT 1")
+        conn.execute("SELECT event_id FROM events LIMIT 1")
         conn.close()
         db_ok = True
     except Exception:
@@ -555,6 +559,7 @@ def _get_subsystem_status(scheduler):
         "scheduler": scheduler_ok,
         "mqtt": mqtt_ok,
         "mqtt_status": mqtt_status,
+        "upload_worker": bool(_upload_worker and _upload_worker.is_alive()),
     }
 
 
@@ -629,137 +634,24 @@ def _get_frigate_reachability_status():
 
 
 def daily_health_report(scheduler):
-    """
-    Sends a daily status report to Mattermost.
-    Determines OK / WARNING / CRITICAL based on pending event age and upload activity.
-    """
-    logging.debug("Generating daily health report...")
+    """Report active work separately from historical gaps; no clip export probes."""
     try:
-        stats = database.get_health_stats()
-    except Exception as e:
-        logging.error(f"Failed to collect health stats: {e}")
-        send_mattermost_notification(
-            title=":rotating_light: CRITICAL: Health report failed",
-            text=f"Could not read stats from the database.\n\n**Error:** `{e}`",
-            color="#d50000",
-        )
-        return
-
-    # Collect additional metrics
-    subsystem = _get_subsystem_status(scheduler)
-    uptime = _get_uptime()
-    last_upload = _get_last_successful_upload()
-    db_size = _get_db_size()
-    frigate_status = _get_frigate_reachability_status()
-    clip_stats = _get_clip_availability_stats()
-
-    # Determine severity
-    is_critical = stats["pending_gt_3d"] > 0 or (
-        stats["uploaded_last_24h"] == 0 and stats.get("pending_retryable", 0) > 0
-    )
-    is_warning = (not is_critical) and (
-        stats["pending_2d_3d"] > 0 or stats["pending_1d_2d"] > 10 or not subsystem["mqtt"] or not subsystem["scheduler"] or not subsystem["db"]
-    )
-
-    if is_critical:
-        title = ":rotating_light: CRITICAL – Frigate Uploader"
-        color = "#d50000"
-        headline = "**There are events that haven't been uploaded for more than 3 days, or nothing was uploaded in the last 24h at all.**"
-    elif is_warning:
-        title = ":warning: Warning – Frigate Uploader"
-        color = "#ffae42"
-        headline = "Pending uploads or a subsystem need attention; see details below."
-    else:
-        title = ":white_check_mark: Frigate Uploader – all good"
-        color = "#36a64f"
-        headline = "Daily report: no overdue retryable uploads. Confirmed source-unavailable records are listed separately below."
-
-    oldest = (
-        f"`{stats['oldest_pending_event_id']}` (**{stats['oldest_pending_age_days']} days** old)"
-        if stats["oldest_pending_event_id"]
-        else "_none_"
-    )
-
-    # Add clip availability status for oldest event
-    if stats["oldest_pending_event_id"] and clip_stats.get("oldest_available") is not None:
-        if clip_stats["oldest_available"]:
-            oldest += " — **clip available**"
-        else:
-            oldest += " — **clip no longer available on Frigate**"
-    elif stats["oldest_pending_event_id"] and clip_stats.get("oldest_available") is None:
-        oldest += " — **availability check failed (network error)**"
-
-    # Subsystem status indicators
-    db_icon = ":white_check_mark:" if subsystem["db"] else ":x:"
-    scheduler_icon = ":white_check_mark:" if subsystem["scheduler"] else ":x:"
-    mqtt_icon = ":white_check_mark:" if subsystem["mqtt"] else ":x:"
-    frigate_icon = ":white_check_mark:" if frigate_status == "reachable" else ":x:"
-
-    text = (
-        f"{headline}\n\n"
-        f"| Metric | Value |\n"
-        f"|---|---|\n"
-        f"| Uploaded last 24h | **{stats['uploaded_last_24h']}** |\n"
-        f"| Pending total | **{stats['pending_total']}** |\n"
-        f"| thereof retryable (action required) | **{stats.get('pending_retryable', 0)}** |\n"
-        f"| thereof confirmed source unavailable | **{stats.get('pending_non_retryable', 0)}** |\n"
-        f"| thereof under 1 day (normal) | {stats['pending_lt_1d']} |\n"
-        f"| thereof 1–2 days | {stats['pending_1d_2d']} |\n"
-        f"| thereof 2–3 days | {stats['pending_2d_3d']} |\n"
-        f"| thereof **over 3 days** | **{stats['pending_gt_3d']}** |\n"
-        f"| Oldest retryable event | {oldest} |\n"
-        f"| Uploaded events retained in local DB | {stats['total_uploaded']} |\n"
-    )
-
-    # Add clip availability statistics
-    if stats.get("pending_retryable", 0) > 0:
-        text += "\n**Clip Availability (retryable events):**\n"
-        text += f"- Clips available on Frigate: **{clip_stats['available']}** (action required)\n"
-        text += f"- Clips no longer available: **{clip_stats['not_available']}** (cannot upload)\n"
-        if clip_stats['unknown'] > 0:
-            text += f"- Availability check failed: **{clip_stats['unknown']}** (network error)\n"
-
-    # Add subsystem status section
-    text += "\n**Subsystem Status:**\n"
-    text += f"- {db_icon} Database\n"
-    text += f"- {scheduler_icon} Scheduler\n"
-    text += f"- {mqtt_icon} MQTT ({subsystem['mqtt_status']})\n"
-    text += f"- {frigate_icon} Frigate ({frigate_status})\n"
-
-    # Add additional metrics
-    text += "\n**Additional Metrics:**\n"
-    text += f"- Uptime: {uptime}\n"
-    text += f"- Last successful upload: {last_upload or '_never_'}\n"
-    text += f"- DB size: {db_size}\n"
-
-    # Surface a breakdown of failure categories among pending events so the
-    # user can see at a glance whether the backlog is dominated by network
-    # issues, Frigate clip-assembly bugs, Drive quota errors, etc.
-    if stats.get("pending_error_kinds"):
-        text += "\n**Pending errors by category:**\n"
-        for kind, count in stats["pending_error_kinds"]:
-            text += f"- `{kind}`: **{count}**\n"
-
-    if is_critical:
-        text += (
-            "\n**Recommended actions:**\n"
-            "- Check container logs: `docker logs frigate-gdrive-instant-uploader --tail 200`\n"
-            "- Check DB state: `SELECT date(created), COUNT(*) FROM events WHERE uploaded=0 GROUP BY 1;`\n"
-            "- Verify Frigate reachability & internet connectivity\n"
-        )
-
-    is_ok = not is_critical and not is_warning
+        stats = reporting.collect(database.DB_PATH)
+        subsystem = _get_subsystem_status(scheduler)
+        subsystem.pop('mqtt_status', None)
+        subsystem['frigate'] = check_frigate_reachable(FRIGATE_URL)
+        title, text, color, is_ok = reporting.render(stats, subsystem)
+    except Exception:
+        title, text, color, is_ok = (
+            ':rotating_light: Frigate Uploader – Statusprüfung fehlgeschlagen',
+            'Statistiken konnten nicht zuverlässig gelesen werden. Zustand unbekannt; Logs prüfen.',
+            '#d50000', False)
+        logging.warning('Daily report statistics unavailable')
     if is_ok and HEALTH_REPORT_ONLY_ON_ISSUES:
-        logging.info(
-            "Daily health report: OK (suppressed Mattermost notification — "
-            "HEALTH_REPORT_ONLY_ON_ISSUES=true). "
-            f"Stats: uploaded_last_24h={stats['uploaded_last_24h']}, "
-            f"pending_total={stats['pending_total']}."
-        )
+        logging.info('Daily health report: healthy; notification suppressed by configuration')
         return
-
     send_mattermost_notification(title=title, text=text, color=color)
-    logging.info(f"Health report sent: {title}")
+    logging.info('Daily health report delivery attempted')
 
 
 def internet(host="8.8.8.8", port=53, timeout=3):
