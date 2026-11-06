@@ -72,7 +72,7 @@ from dotenv import load_dotenv
 import paho.mqtt.client as mqtt
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from src import database, google_drive, work_queue, segmented_upload, reporting
+from src import database, google_drive, work_queue, segmented_upload, reporting, source_recovery
 from src.frigate_api import fetch_all_events, fetch_event, check_frigate_reachable, EventNotFoundError, ClipNotAvailableError, ClipTooLargeError, FrigateUnreachableError
 from src.google_drive import cleanup_old_files_on_drive, service
 from src.healthcheck import HealthState, start_healthcheck_server
@@ -339,6 +339,7 @@ def handle_single_event(event_data, skip_wait=False, online=None):
 
 
 def upload_worker():
+    next_source_check = 0.0
     while True:
         try:
             jobs = work_queue.due()
@@ -365,6 +366,10 @@ def upload_worker():
                     work_queue.failed(event_id, kind, detail=detail, deterministic=deterministic)
                     # Safe detail only: third-party exceptions may contain URLs/tokens.
                     logging.warning('Upload deferred for %s (%s): %s', event_id, kind, detail)
+            # New uploads have priority; at most one bounded late-source check.
+            if time.monotonic() >= next_source_check:
+                source_recovery.recheck_one(FRIGATE_URL)
+                next_source_check = time.monotonic() + 5
         except Exception:
             logging.exception('Upload worker cycle failed; retrying')
         _work_ready.wait(5)

@@ -307,4 +307,27 @@ The English daily report separates active work, review-required errors, source c
 
 Schema migration is additive and idempotent. Before deployment, create a consistent SQLite backup and retain the previous image and configuration. Once new uploads have occurred, never restore an old database over the current one. A downgrade to an older worker requires reviewing the new partial/review states; prefer a forward fix preserving current IDs and archived files.
 
+### Late recordings after a missing-source result
+
+Frigate can finalize a recording after an event has already been closed as
+`unavailable` with `recordings_missing`. The worker checks such events again once
+per hour, after current uploads, with at most one source-list request every five
+seconds. The schedule is persisted in SQLite and survives restarts and event
+rediscovery. Source requests use a five-second connect and fifteen-second read
+timeout; errors do not count as evidence that media is missing.
+
+Only events with no planned/uploaded parts or assigned Drive identities qualify.
+An overlapping, nonempty recording returns the unchanged event to the normal
+upload queue, which still downloads, validates and verifies Drive size/checksum
+before marking success. The recheck itself never downloads media or contacts Drive.
+Completed events, partial archives, existing parts and jobs requiring review remain
+untouched. No camera settings, recording retention or timestamp correction changes.
+
+`/status` includes aggregate `operations.late_sources` counters, last check time and
+results. The additive `late_source_*` job columns keep the schedule and recovery
+evidence; an older worker ignores these columns. A code/image rollback can keep the
+current database and all acquired Drive identities. Do not restore the pre-upgrade
+database over later successful uploads. Existing historical source-gap reporting
+remains informational; no test notification is required for this mechanism.
+
 Run isolated regression tests with `python -m unittest discover -s tests -v`. They use synthetic media and temporary databases; live acceptance should verify remote sizes/checksums and preserved pre-deployment success records separately.

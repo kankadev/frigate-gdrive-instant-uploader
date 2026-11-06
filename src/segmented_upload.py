@@ -23,9 +23,9 @@ class SourceMissing(Exception):
     pass
 
 
-def recordings(base, camera, start, end):
+def recordings(base, camera, start, end, timeout=(10, 60)):
     response = requests.get(f'{base}/api/{quote(camera, safe="")}/recordings',
-                            params={'after': start, 'before': end}, timeout=(10, 60))
+                            params={'after': start, 'before': end}, timeout=timeout)
     response.raise_for_status()
     rows = response.json()
     if not isinstance(rows, list):

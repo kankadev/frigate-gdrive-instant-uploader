@@ -30,7 +30,10 @@ def initialize():
         # Additive, idempotent migration: preserve all existing IDs and successes.
         additions = {
             'upload_jobs': {'error_detail': 'TEXT', 'last_failure_at': 'REAL',
-                'last_progress_at': 'REAL', 'consecutive_error': 'INTEGER DEFAULT 0'},
+                'last_progress_at': 'REAL', 'consecutive_error': 'INTEGER DEFAULT 0',
+                'late_source_next_check': 'REAL DEFAULT 0', 'late_source_checked_at': 'REAL',
+                'late_source_result': 'TEXT', 'late_source_checks': 'INTEGER DEFAULT 0',
+                'late_source_reopened_at': 'REAL'},
             'upload_parts': {'coverage': "TEXT DEFAULT 'full'", 'archived_duration': 'REAL',
                 'source_intervals': 'TEXT', 'planned_intervals': 'TEXT', 'source_missing_since': 'REAL',
                 'source_checked_at': 'REAL', 'export_start': 'REAL', 'export_end': 'REAL',
@@ -41,6 +44,8 @@ def initialize():
             for name, definition in columns.items():
                 if name not in present:
                     c.execute('ALTER TABLE '+table+' ADD COLUMN '+name+' '+definition)
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_late_source_due
+                     ON upload_jobs(state,error,late_source_next_check)''')
         # Import legacy failures once. A retry budget must never erase a video.
         c.execute('''INSERT OR IGNORE INTO upload_jobs(event_id)
                      SELECT event_id FROM events WHERE uploaded=0''')
@@ -68,6 +73,58 @@ def due():
         return [dict(r) for r in c.execute('''SELECT j.* FROM upload_jobs j JOIN events e
             USING(event_id) WHERE j.state='pending' AND e.uploaded=0 AND next_attempt<=?
             ORDER BY next_attempt,event_id LIMIT 100''', (time.time(),))]
+
+
+# Revisit fully missing events without touching partial archives or assigned IDs.
+# This schedule is independent of the ordinary upload/failure backoff.
+LATE_SOURCE_INTERVAL = 3600
+_MISSING_SOURCE = """j.state='unavailable' AND j.error='recordings_missing'
+    AND e.uploaded=0 AND e.retry=0
+    AND NOT EXISTS (SELECT 1 FROM upload_parts p WHERE p.event_id=j.event_id)"""
+
+
+def claim_missing_source():
+    """Reserve at most one check, durably, before any network I/O."""
+    now = time.time()
+    with connection() as c:
+        c.execute('BEGIN IMMEDIATE')
+        row = c.execute('''SELECT j.* FROM upload_jobs j JOIN events e USING(event_id)
+            WHERE ''' + _MISSING_SOURCE + ''' AND COALESCE(j.late_source_next_check,0)<=?
+            ORDER BY COALESCE(j.late_source_next_check,0),j.event_id LIMIT 1''', (now,)).fetchone()
+        if row is None:
+            return None
+        job = dict(row)
+        job['late_source_next_check'] = now + LATE_SOURCE_INTERVAL
+        c.execute('''UPDATE upload_jobs SET late_source_next_check=?,
+            late_source_checked_at=?,late_source_result='checking',
+            late_source_checks=COALESCE(late_source_checks,0)+1 WHERE event_id=?''',
+            (job['late_source_next_check'], now, job['event_id']))
+        return job
+
+
+def finish_source_check(job, result):
+    """Reopen only the unchanged, still unarchived job whose source was found."""
+    if result not in {'available', 'missing', 'invalid_metadata', 'invalid_source', 'request_failed'}:
+        raise ValueError('Unknown source check result')
+    with connection() as c:
+        c.execute('BEGIN IMMEDIATE')
+        row = c.execute('''SELECT j.event_id FROM upload_jobs j JOIN events e USING(event_id)
+            WHERE ''' + _MISSING_SOURCE + ''' AND j.event_id=? AND j.metadata IS ?
+            AND j.late_source_next_check=? AND j.late_source_result='checking' ''',
+            (job['event_id'], job['metadata'], job['late_source_next_check'])).fetchone()
+        if row is None:
+            return False
+        now = time.time()
+        c.execute('UPDATE upload_jobs SET late_source_checked_at=?,late_source_result=? WHERE event_id=?',
+                  (now, 'reopened' if result == 'available' else result, job['event_id']))
+        if result == 'available':
+            c.execute('''UPDATE upload_jobs SET state='pending',next_attempt=?,
+                missing_since=NULL,error=NULL,error_detail=NULL,consecutive_error=0,
+                completed_at=NULL,late_source_reopened_at=? WHERE event_id=?''',
+                (now, now, job['event_id']))
+            c.execute('UPDATE events SET retry=1,last_error_kind=NULL WHERE event_id=?',
+                      (job['event_id'],))
+        return True
 
 
 def failed(event_id, kind, missing=False, detail=None, deterministic=False):

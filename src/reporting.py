@@ -60,6 +60,13 @@ def collect(db_path, now=None):
         }
         s['active_errors'] = [tuple(r) for r in c.execute('SELECT error,count(*) FROM upload_jobs WHERE state IN ("pending","review") AND error IS NOT NULL GROUP BY error ORDER BY count(*) DESC')]
         s['open_parts'] = scalar('SELECT count(*) FROM upload_parts p JOIN upload_jobs j USING(event_id) WHERE j.state IN ("pending","review") AND p.uploaded=0 AND p.coverage!="unavailable"')
+        s['late_sources'] = {
+            'checks': scalar('SELECT sum(late_source_checks) FROM upload_jobs'),
+            'last_checked': scalar('SELECT max(late_source_checked_at) FROM upload_jobs'),
+            'reopened': scalar('SELECT count(*) FROM upload_jobs WHERE late_source_reopened_at IS NOT NULL'),
+            'last_results': [tuple(r) for r in c.execute('''SELECT late_source_result,count(*)
+                FROM upload_jobs WHERE late_source_result IS NOT NULL GROUP BY late_source_result''')],
+        }
         return s
     finally:
         c.rollback()
@@ -108,6 +115,9 @@ def render(s, subsystems):
         '- Confirmed historical gaps do not require action and do not raise warnings, '
         'even when newly confirmed. They are not counted as active retries. '
         'Rescued recordings are preserved; partially archived does not mean complete.\n'
+        '- Fully missing events without existing archive parts are checked again hourly '
+        'for late recordings, one source check per worker cycle. Available sources return '
+        'to the normal verified upload queue; partial archives and review states remain unchanged.\n'
         '\n**Subsystem status**\n\n'
     )
     for name, healthy in subsystems.items():
